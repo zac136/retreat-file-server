@@ -328,6 +328,34 @@ app.delete('/delete-booking/:id', async (req, res) => {
   }
 });
 
+// ─── Get/Set blocked dates ───────────────────────────────────────────────────
+
+app.get('/get-blocked-dates', async (req, res) => {
+  try {
+    const { data } = await getBookingsData();
+    res.json({ success: true, blockedDates: data.blockedDates || [] });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/set-blocked-dates', async (req, res) => {
+  try {
+    const { blockedDates } = req.body;
+    if (!Array.isArray(blockedDates)) return res.status(400).json({ error: 'blockedDates must be an array' });
+    const { data: existingData } = await getBookingsData();
+    existingData.blockedDates = blockedDates;
+    const result = await setBookingsData(existingData);
+    if (result?.metafieldsSet?.userErrors?.length > 0) {
+      return res.status(500).json({ error: 'Failed to save blocked dates', details: result.metafieldsSet.userErrors });
+    }
+    res.json({ success: true, count: blockedDates.length });
+  } catch (error) {
+    console.error('Set blocked dates error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ─── Start server ─────────────────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 3001;
