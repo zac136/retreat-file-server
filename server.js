@@ -232,7 +232,7 @@ app.post('/save-booking', async (req, res) => {
 app.get('/get-bookings', async (req, res) => {
   try {
     const { data } = await getBookingsData();
-    res.json({ success: true, bookings: data.bookings || [], bookedDates: data.bookedDates || [] });
+    res.json({ success: true, bookings: data.bookings || [], bookedDates: data.bookedDates || [], blockedDates: data.blockedDates || [] });
   } catch (error) {
     console.error('Get bookings error:', error);
     res.status(500).json({ error: error.message });
