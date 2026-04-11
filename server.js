@@ -169,12 +169,17 @@ app.post('/upload', upload.single('file'), async (req, res) => {
     const target = stagedData.data?.stagedUploadsCreate?.stagedTargets?.[0];
     if (!target) return res.status(500).json({ error: 'No staged target returned' });
 
-    // Step 2: Upload to S3
+    // Step 2: Upload to S3 using form-data (node-fetch v2 compatible)
     const formData = new FormData();
     target.parameters.forEach(p => formData.append(p.name, p.value));
-    formData.append('file', file.buffer, { filename, contentType: file.mimetype });
+    // Use Buffer directly for node-fetch v2 compatibility
+    formData.append('file', file.buffer, { filename: filename, contentType: file.mimetype, knownLength: file.size });
 
-    const uploadRes = await fetch(target.url, { method: 'POST', body: formData });
+    const uploadRes = await fetch(target.url, {
+      method: 'POST',
+      body: formData,
+      headers: formData.getHeaders()
+    });
     if (!uploadRes.ok) {
       const errText = await uploadRes.text();
       return res.status(500).json({ error: 'S3 upload failed', details: errText.substring(0, 200) });
