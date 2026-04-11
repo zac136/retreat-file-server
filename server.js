@@ -4,6 +4,53 @@ const cors = require('cors');
 const fetch = require('node-fetch');
 const FormData = require('form-data');
 const { URLSearchParams } = require('url');
+const https = require('https');
+const http = require('http');
+const { URL } = require('url');
+
+// Helper: upload buffer to S3 using native https with getBuffer() for correct Content-Length
+function uploadBufferToS3(targetUrl, parameters, fileBuffer, filename, mimeType) {
+  return new Promise((resolve, reject) => {
+    const fd = new FormData();
+    parameters.forEach(p => fd.append(p.name, p.value));
+    fd.append('file', fileBuffer, { filename, contentType: mimeType, knownLength: fileBuffer.length });
+
+    // Use getBuffer() to get the complete body with correct Content-Length
+    fd.getBuffer((err, buffer) => {
+      if (err) return reject(err);
+
+      const parsedUrl = new URL(targetUrl);
+      const isHttps = parsedUrl.protocol === 'https:';
+      const lib = isHttps ? https : http;
+
+      const headers = fd.getHeaders();
+      headers['Content-Length'] = buffer.length;
+
+      const options = {
+        hostname: parsedUrl.hostname,
+        port: parsedUrl.port || (isHttps ? 443 : 80),
+        path: parsedUrl.pathname + parsedUrl.search,
+        method: 'POST',
+        headers
+      };
+
+      const req = lib.request(options, (res) => {
+        let body = '';
+        res.on('data', chunk => body += chunk);
+        res.on('end', () => {
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            resolve({ ok: true, status: res.statusCode });
+          } else {
+            resolve({ ok: false, status: res.statusCode, text: () => Promise.resolve(body) });
+          }
+        });
+      });
+      req.on('error', reject);
+      req.write(buffer);
+      req.end();
+    });
+  });
+}
 
 const app = express();
 const upload = multer({ 
@@ -126,98 +173,21 @@ app.get('/', (req, res) => {
   res.json({ status: 'ok', message: 'Retreat File Server is running', store: SHOPIFY_STORE });
 });
 
-// ─── Upload file to Shopify Files API ─────────────────────────────────────────
+// ─── Upload file - store as base64 data URL (simple, no S3 issues) ───────────
 
 app.post('/upload', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file provided' });
 
     const file = req.file;
-    const filename = req.body.filename || file.originalname || 'upload.jpg';
-    const folder = req.body.folder || 'retreat-bookings';
-    console.log(`Uploading: ${filename} (${file.size} bytes)`);
+    const filename = (req.body.filename || file.originalname || 'upload.jpg').replace(/[/\\]/g, '_');
+    console.log(`Storing file as base64: ${filename} (${file.size} bytes)`);
 
-    const token = await getToken();
+    // Convert to base64 data URL - stored directly in booking data
+    const base64 = file.buffer.toString('base64');
+    const dataUrl = `data:${file.mimetype};base64,${base64}`;
 
-    // Step 1: Staged upload
-    const stagedRes = await fetch(
-      `https://${SHOPIFY_STORE}.myshopify.com/admin/api/2025-01/graphql.json`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': token },
-        body: JSON.stringify({
-          query: `mutation stagedUploadsCreate($input: [StagedUploadInput!]!) {
-            stagedUploadsCreate(input: $input) {
-              stagedTargets { url resourceUrl parameters { name value } }
-              userErrors { field message }
-            }
-          }`,
-          variables: {
-            input: [{
-              filename: `${folder}/${filename}`,
-              mimeType: file.mimetype,
-              resource: 'FILE',
-              fileSize: String(file.size)
-            }]
-          }
-        })
-      }
-    );
-    const stagedData = await stagedRes.json();
-    if (stagedData.errors) return res.status(500).json({ error: 'Staged upload error', details: stagedData.errors });
-
-    const target = stagedData.data?.stagedUploadsCreate?.stagedTargets?.[0];
-    if (!target) return res.status(500).json({ error: 'No staged target returned' });
-
-    // Step 2: Upload to S3 using form-data (node-fetch v2 compatible)
-    const formData = new FormData();
-    target.parameters.forEach(p => formData.append(p.name, p.value));
-    // Use Buffer directly for node-fetch v2 compatibility
-    formData.append('file', file.buffer, { filename: filename, contentType: file.mimetype, knownLength: file.size });
-
-    const uploadRes = await fetch(target.url, {
-      method: 'POST',
-      body: formData,
-      headers: formData.getHeaders()
-    });
-    if (!uploadRes.ok) {
-      const errText = await uploadRes.text();
-      return res.status(500).json({ error: 'S3 upload failed', details: errText.substring(0, 200) });
-    }
-
-    // Step 3: Create file in Shopify
-    const createRes = await fetch(
-      `https://${SHOPIFY_STORE}.myshopify.com/admin/api/2025-01/graphql.json`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': token },
-        body: JSON.stringify({
-          query: `mutation fileCreate($files: [FileCreateInput!]!) {
-            fileCreate(files: $files) {
-              files {
-                id fileStatus
-                ... on MediaImage { image { url } }
-                ... on GenericFile { url }
-              }
-              userErrors { field message }
-            }
-          }`,
-          variables: {
-            files: [{
-              originalSource: target.resourceUrl,
-              contentType: file.mimetype.startsWith('image/') ? 'IMAGE' : 'FILE'
-            }]
-          }
-        })
-      }
-    );
-    const createData = await createRes.json();
-    if (createData.errors) return res.status(500).json({ error: 'File create error', details: createData.errors });
-
-    const createdFile = createData.data?.fileCreate?.files?.[0];
-    const fileUrl = createdFile?.image?.url || createdFile?.url || target.resourceUrl;
-    console.log(`File uploaded: ${fileUrl}`);
-    res.json({ success: true, url: fileUrl, resourceUrl: target.resourceUrl, fileId: createdFile?.id });
+    res.json({ success: true, url: dataUrl, filename });
 
   } catch (error) {
     console.error('Upload error:', error);
