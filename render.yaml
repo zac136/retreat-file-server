@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: retreat-file-server
+    env: node
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: SHOPIFY_TOKEN
+        value: SET_IN_RENDER_DASHBOARD
+      - key: PORT
+        value: 3001
