@@ -3,6 +3,7 @@ const multer = require('multer');
 const cors = require('cors');
 const fetch = require('node-fetch');
 const FormData = require('form-data');
+const { URLSearchParams } = require('url');
 
 const app = express();
 const upload = multer({ 
@@ -10,29 +11,79 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 } // 10MB max
 });
 
-// CORS - allow Shopify store
+// CORS - allow Shopify store and any origin
 app.use(cors({
-  origin: [
-    'https://retreat-beach-house.myshopify.com',
-    'https://www.retreat-beach-house.com',
-    /\.myshopify\.com$/,
-    /\.manus\.computer$/,
-    'http://localhost:3000',
-    'http://localhost:5173'
-  ],
+  origin: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 app.use(express.json({ limit: '10mb' }));
 
-const SHOPIFY_STORE = 'retreat-beach-house.myshopify.com';
-const SHOPIFY_TOKEN = process.env.SHOPIFY_TOKEN;
+const SHOPIFY_STORE = process.env.SHOPIFY_SHOP || 'retreat-beach-house';
+const CLIENT_ID = process.env.SHOPIFY_CLIENT_ID || '902780ff14e9ff166032ae60998ec881';
+const CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET || process.env.SHOPIFY_TOKEN;
+const SHOP_ID = 'gid://shopify/Shop/73972482215';
+
+// ─── OAuth Token Management ───────────────────────────────────────────────────
+
+let _token = null;
+let _tokenExpiresAt = 0;
+
+async function getToken() {
+  if (_token && Date.now() < _tokenExpiresAt - 60_000) return _token;
+
+  const response = await fetch(
+    `https://${SHOPIFY_STORE}.myshopify.com/admin/oauth/access_token`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'client_credentials',
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET,
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Token request failed: ${response.status} - ${text.substring(0, 200)}`);
+  }
+
+  const data = await response.json();
+  if (!data.access_token) throw new Error('No access_token in response');
+
+  _token = data.access_token;
+  _tokenExpiresAt = Date.now() + (data.expires_in || 86399) * 1000;
+  console.log('Got new Shopify token, expires in', data.expires_in, 'seconds');
+  return _token;
+}
+
+async function shopifyGraphQL(query, variables = {}) {
+  const token = await getToken();
+  const response = await fetch(
+    `https://${SHOPIFY_STORE}.myshopify.com/admin/api/2025-01/graphql.json`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Shopify-Access-Token': token,
+      },
+      body: JSON.stringify({ query, variables }),
+    }
+  );
+
+  if (!response.ok) throw new Error(`GraphQL request failed: ${response.status}`);
+  const { data, errors } = await response.json();
+  if (errors?.length) throw new Error(`GraphQL errors: ${JSON.stringify(errors)}`);
+  return data;
+}
 
 // ─── Helper: get/set bookings metafield ───────────────────────────────────────
 
 async function getBookingsData() {
-  const getQuery = `
+  const data = await shopifyGraphQL(`
     query {
       shop {
         metafield(namespace: "retreat", key: "bookings") {
@@ -41,17 +92,8 @@ async function getBookingsData() {
         }
       }
     }
-  `;
-  const res = await fetch(`https://${SHOPIFY_STORE}/admin/api/2024-01/graphql.json`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Shopify-Access-Token': SHOPIFY_TOKEN
-    },
-    body: JSON.stringify({ query: getQuery })
-  });
-  const data = await res.json();
-  const metafield = data.data?.shop?.metafield;
+  `);
+  const metafield = data?.shop?.metafield;
   let parsed = { bookings: [], bookedDates: [] };
   if (metafield?.value) {
     try { parsed = JSON.parse(metafield.value); } catch(e) {}
@@ -60,158 +102,116 @@ async function getBookingsData() {
 }
 
 async function setBookingsData(payload) {
-  const setQuery = `
+  return shopifyGraphQL(`
     mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
       metafieldsSet(metafields: $metafields) {
         metafields { id key value }
         userErrors { field message }
       }
     }
-  `;
-  const res = await fetch(`https://${SHOPIFY_STORE}/admin/api/2024-01/graphql.json`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Shopify-Access-Token': SHOPIFY_TOKEN
-    },
-    body: JSON.stringify({
-      query: setQuery,
-      variables: {
-        metafields: [{
-          ownerId: `gid://shopify/Shop/1`,
-          namespace: 'retreat',
-          key: 'bookings',
-          value: JSON.stringify(payload),
-          type: 'json'
-        }]
-      }
-    })
+  `, {
+    metafields: [{
+      ownerId: SHOP_ID,
+      namespace: 'retreat',
+      key: 'bookings',
+      value: JSON.stringify(payload),
+      type: 'json'
+    }]
   });
-  return res.json();
 }
 
 // ─── Health check ─────────────────────────────────────────────────────────────
 
 app.get('/', (req, res) => {
-  res.json({ status: 'ok', message: 'Retreat File Server is running' });
+  res.json({ status: 'ok', message: 'Retreat File Server is running', store: SHOPIFY_STORE });
 });
 
 // ─── Upload file to Shopify Files API ─────────────────────────────────────────
 
 app.post('/upload', upload.single('file'), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No file provided' });
-    }
+    if (!req.file) return res.status(400).json({ error: 'No file provided' });
 
     const file = req.file;
     const filename = req.body.filename || file.originalname || 'upload.jpg';
     const folder = req.body.folder || 'retreat-bookings';
-
     console.log(`Uploading: ${filename} (${file.size} bytes)`);
 
-    const stagedQuery = `
-      mutation stagedUploadsCreate($input: [StagedUploadInput!]!) {
-        stagedUploadsCreate(input: $input) {
-          stagedTargets {
-            url
-            resourceUrl
-            parameters { name value }
+    const token = await getToken();
+
+    // Step 1: Staged upload
+    const stagedRes = await fetch(
+      `https://${SHOPIFY_STORE}.myshopify.com/admin/api/2025-01/graphql.json`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': token },
+        body: JSON.stringify({
+          query: `mutation stagedUploadsCreate($input: [StagedUploadInput!]!) {
+            stagedUploadsCreate(input: $input) {
+              stagedTargets { url resourceUrl parameters { name value } }
+              userErrors { field message }
+            }
+          }`,
+          variables: {
+            input: [{
+              filename: `${folder}/${filename}`,
+              mimeType: file.mimetype,
+              resource: 'FILE',
+              fileSize: String(file.size)
+            }]
           }
-          userErrors { field message }
-        }
+        })
       }
-    `;
-
-    const stagedResponse = await fetch(`https://${SHOPIFY_STORE}/admin/api/2024-01/graphql.json`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Shopify-Access-Token': SHOPIFY_TOKEN
-      },
-      body: JSON.stringify({
-        query: stagedQuery,
-        variables: {
-          input: [{
-            filename: `${folder}/${filename}`,
-            mimeType: file.mimetype,
-            resource: 'FILE',
-            fileSize: String(file.size)
-          }]
-        }
-      })
-    });
-
-    const stagedData = await stagedResponse.json();
-    if (stagedData.errors) {
-      return res.status(500).json({ error: 'Failed to get upload URL', details: stagedData.errors });
-    }
+    );
+    const stagedData = await stagedRes.json();
+    if (stagedData.errors) return res.status(500).json({ error: 'Staged upload error', details: stagedData.errors });
 
     const target = stagedData.data?.stagedUploadsCreate?.stagedTargets?.[0];
-    if (!target) {
-      return res.status(500).json({ error: 'No staged target returned' });
-    }
+    if (!target) return res.status(500).json({ error: 'No staged target returned' });
 
+    // Step 2: Upload to S3
     const formData = new FormData();
-    target.parameters.forEach(param => {
-      formData.append(param.name, param.value);
-    });
-    formData.append('file', file.buffer, {
-      filename: filename,
-      contentType: file.mimetype
-    });
+    target.parameters.forEach(p => formData.append(p.name, p.value));
+    formData.append('file', file.buffer, { filename, contentType: file.mimetype });
 
-    const uploadResponse = await fetch(target.url, {
-      method: 'POST',
-      body: formData
-    });
-
-    if (!uploadResponse.ok) {
-      const errText = await uploadResponse.text();
-      console.error('Upload to staged URL failed:', errText);
-      return res.status(500).json({ error: 'Failed to upload to staged URL' });
+    const uploadRes = await fetch(target.url, { method: 'POST', body: formData });
+    if (!uploadRes.ok) {
+      const errText = await uploadRes.text();
+      return res.status(500).json({ error: 'S3 upload failed', details: errText.substring(0, 200) });
     }
 
-    const createQuery = `
-      mutation fileCreate($files: [FileCreateInput!]!) {
-        fileCreate(files: $files) {
-          files {
-            id
-            fileStatus
-            ... on MediaImage { image { url } }
-            ... on GenericFile { url }
+    // Step 3: Create file in Shopify
+    const createRes = await fetch(
+      `https://${SHOPIFY_STORE}.myshopify.com/admin/api/2025-01/graphql.json`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': token },
+        body: JSON.stringify({
+          query: `mutation fileCreate($files: [FileCreateInput!]!) {
+            fileCreate(files: $files) {
+              files {
+                id fileStatus
+                ... on MediaImage { image { url } }
+                ... on GenericFile { url }
+              }
+              userErrors { field message }
+            }
+          }`,
+          variables: {
+            files: [{
+              originalSource: target.resourceUrl,
+              contentType: file.mimetype.startsWith('image/') ? 'IMAGE' : 'FILE'
+            }]
           }
-          userErrors { field message }
-        }
+        })
       }
-    `;
-
-    const createResponse = await fetch(`https://${SHOPIFY_STORE}/admin/api/2024-01/graphql.json`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Shopify-Access-Token': SHOPIFY_TOKEN
-      },
-      body: JSON.stringify({
-        query: createQuery,
-        variables: {
-          files: [{
-            originalSource: target.resourceUrl,
-            contentType: file.mimetype.startsWith('image/') ? 'IMAGE' : 'FILE'
-          }]
-        }
-      })
-    });
-
-    const createData = await createResponse.json();
-    if (createData.errors) {
-      return res.status(500).json({ error: 'Failed to create file', details: createData.errors });
-    }
+    );
+    const createData = await createRes.json();
+    if (createData.errors) return res.status(500).json({ error: 'File create error', details: createData.errors });
 
     const createdFile = createData.data?.fileCreate?.files?.[0];
     const fileUrl = createdFile?.image?.url || createdFile?.url || target.resourceUrl;
-
-    console.log(`File uploaded successfully: ${fileUrl}`);
+    console.log(`File uploaded: ${fileUrl}`);
     res.json({ success: true, url: fileUrl, resourceUrl: target.resourceUrl, fileId: createdFile?.id });
 
   } catch (error) {
@@ -228,29 +228,24 @@ app.post('/save-booking', async (req, res) => {
     if (!booking) return res.status(400).json({ error: 'No booking data provided' });
 
     const { data: existingData } = await getBookingsData();
-
     existingData.bookings = existingData.bookings || [];
     existingData.bookedDates = existingData.bookedDates || [];
 
-    // Assign unique id if missing
     if (!booking.id) booking.id = Date.now().toString();
     booking.status = booking.status || 'confirmed';
     booking.createdAt = booking.createdAt || new Date().toISOString();
 
     existingData.bookings.unshift(booking);
-
     if (booking.checkIn && booking.checkOut) {
       existingData.bookedDates.push({ start: booking.checkIn, end: booking.checkOut, bookingId: booking.id });
     }
 
-    const setData = await setBookingsData(existingData);
-    if (setData.errors || setData.data?.metafieldsSet?.userErrors?.length > 0) {
-      console.error('Metafield error:', setData.errors || setData.data?.metafieldsSet?.userErrors);
-      return res.status(500).json({ error: 'Failed to save booking' });
+    const result = await setBookingsData(existingData);
+    if (result?.metafieldsSet?.userErrors?.length > 0) {
+      return res.status(500).json({ error: 'Failed to save booking', details: result.metafieldsSet.userErrors });
     }
 
     res.json({ success: true, bookingId: booking.id });
-
   } catch (error) {
     console.error('Save booking error:', error);
     res.status(500).json({ error: error.message });
@@ -282,7 +277,6 @@ app.put('/update-booking/:id', async (req, res) => {
     const idx = existingData.bookings.findIndex(b => b.id === id);
     if (idx === -1) return res.status(404).json({ error: 'Booking not found' });
 
-    // Merge updates
     existingData.bookings[idx] = { ...existingData.bookings[idx], ...updates, id };
 
     // Rebuild bookedDates
@@ -290,13 +284,12 @@ app.put('/update-booking/:id', async (req, res) => {
       .filter(b => b.status !== 'cancelled' && b.checkIn && b.checkOut)
       .map(b => ({ start: b.checkIn, end: b.checkOut, bookingId: b.id }));
 
-    const setData = await setBookingsData(existingData);
-    if (setData.errors || setData.data?.metafieldsSet?.userErrors?.length > 0) {
+    const result = await setBookingsData(existingData);
+    if (result?.metafieldsSet?.userErrors?.length > 0) {
       return res.status(500).json({ error: 'Failed to update booking' });
     }
 
     res.json({ success: true, booking: existingData.bookings[idx] });
-
   } catch (error) {
     console.error('Update booking error:', error);
     res.status(500).json({ error: error.message });
@@ -317,17 +310,14 @@ app.delete('/cancel-booking/:id', async (req, res) => {
 
     existingData.bookings[idx].status = 'cancelled';
     existingData.bookings[idx].cancelledAt = new Date().toISOString();
-
-    // Remove from bookedDates
     existingData.bookedDates = (existingData.bookedDates || []).filter(d => d.bookingId !== id);
 
-    const setData = await setBookingsData(existingData);
-    if (setData.errors || setData.data?.metafieldsSet?.userErrors?.length > 0) {
+    const result = await setBookingsData(existingData);
+    if (result?.metafieldsSet?.userErrors?.length > 0) {
       return res.status(500).json({ error: 'Failed to cancel booking' });
     }
 
     res.json({ success: true, message: 'Booking cancelled' });
-
   } catch (error) {
     console.error('Cancel booking error:', error);
     res.status(500).json({ error: error.message });
@@ -351,30 +341,22 @@ app.delete('/delete-booking/:id', async (req, res) => {
       return res.status(404).json({ error: 'Booking not found' });
     }
 
-    const setData = await setBookingsData(existingData);
-    if (setData.errors || setData.data?.metafieldsSet?.userErrors?.length > 0) {
+    const result = await setBookingsData(existingData);
+    if (result?.metafieldsSet?.userErrors?.length > 0) {
       return res.status(500).json({ error: 'Failed to delete booking' });
     }
 
     res.json({ success: true, message: 'Booking deleted permanently' });
-
   } catch (error) {
     console.error('Delete booking error:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// ─── Get shop ID helper ───────────────────────────────────────────────────────
-
-async function getShopId() {
-  const response = await fetch(`https://${SHOPIFY_STORE}/admin/api/2024-01/shop.json`, {
-    headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN }
-  });
-  const data = await response.json();
-  return data.shop?.id;
-}
+// ─── Start server ─────────────────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`Retreat File Server running on port ${PORT}`);
+  console.log(`Store: ${SHOPIFY_STORE}.myshopify.com`);
 });
