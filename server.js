@@ -346,7 +346,7 @@ app.get('/sign/:token', async (req, res) => {
         price: booking.price,
         guests: booking.guests,
         package: booking.package,
-        deposit: booking.deposit || '',
+        deposit: booking.deposit || '100 د.ك',
         securityDeposit: booking.securityDeposit || '100 د.ك'
       }
     });
@@ -644,7 +644,7 @@ async function loadBooking() {
     html += '<div class="info-row"><span class="label">تاريخ الخروج:</span><span class="value">' + b.checkOut + '</span></div>';
     html += '<div class="info-row"><span class="label">مبلغ الإيجار:</span><span class="value">' + b.price + '</span></div>';
     html += '<div class="info-row"><span class="label">مبلغ التأمين:</span><span class="value">' + (b.securityDeposit || '100 د.ك') + '</span></div>';
-    html += '<div class="info-row"><span class="label">مبلغ العربون:</span><span class="value">' + (b.deposit || '—') + '</span></div>';
+    html += '<div class="info-row"><span class="label">مبلغ العربون:</span><span class="value">' + (b.deposit || '100 د.ك') + '</span></div>';
     html += '<div class="info-row"><span class="label">عدد الأشخاص:</span><span class="value">' + (b.guests || '—') + '</span></div>';
     html += '</div>';
 
