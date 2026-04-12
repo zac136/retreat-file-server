@@ -558,17 +558,17 @@ body { font-family: 'Tajawal', Arial, sans-serif; background: #f6f3ee; color: #2
 .logo-section img { width: 140px; margin-bottom: 8px; }
 .logo-section h1 { font-size: 20px; color: #1a3a4a; font-weight: 700; }
 .logo-section p { color: #9a8f82; font-size: 13px; }
-.card { background: #fff; border-radius: 12px; padding: 20px; margin-bottom: 16px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
+.card { background: #fff; border-radius: 12px; padding: 20px; margin-bottom: 16px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); border: 1px solid #e8e2d8; }
 .card h2 { font-size: 16px; color: #1a3a4a; margin-bottom: 12px; border-bottom: 2px solid #c9a961; padding-bottom: 8px; }
 .info-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f0ebe4; font-size: 14px; }
 .info-row:last-child { border-bottom: none; }
 .info-row .label { color: #7a7060; }
 .info-row .value { color: #1a3a4a; font-weight: 600; }
-.terms-card { background: #fff; border-radius: 12px; padding: 20px; margin-bottom: 16px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
+.terms-card { background: #fff; border-radius: 12px; padding: 20px; margin-bottom: 16px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); border: 1px solid #e8e2d8; }
 .terms-card h2 { font-size: 16px; color: #1a3a4a; margin-bottom: 12px; border-bottom: 2px solid #c9a961; padding-bottom: 8px; }
 .terms-card ol { padding-right: 20px; font-size: 12px; line-height: 1.6; color: #4a4540; }
 .terms-card li { margin-bottom: 4px; }
-.sig-card { background: #fff; border-radius: 12px; padding: 20px; margin-bottom: 16px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); text-align: center; }
+.sig-card { background: #fff; border-radius: 12px; padding: 20px; margin-bottom: 16px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); border: 1px solid #e8e2d8; text-align: center; }
 .sig-card h2 { font-size: 16px; color: #1a3a4a; margin-bottom: 4px; }
 .sig-card p { color: #9a8f82; font-size: 13px; margin-bottom: 12px; }
 canvas { border: 2px dashed #c9a961; border-radius: 8px; background: #fefcf9; touch-action: none; width: 100%; max-width: 500px; }
