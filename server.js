@@ -546,6 +546,115 @@ app.post('/send-booking-email', async (req, res) => {
   }
 });
 
+
+// ─── Theme file management (for updating Liquid templates) ──────────────────
+
+app.get('/get-theme-file', async (req, res) => {
+  try {
+    const { key } = req.query;
+    if (!key) return res.status(400).json({ error: 'key parameter required' });
+    
+    // Get active theme ID
+    const themesData = await shopifyGraphQL(`
+      query {
+        themes(first: 10, roles: [MAIN]) {
+          nodes {
+            id
+            name
+            role
+          }
+        }
+      }
+    `);
+    
+    const mainTheme = themesData?.themes?.nodes?.[0];
+    if (!mainTheme) return res.status(404).json({ error: 'No main theme found' });
+    
+    // Get the file content
+    const fileData = await shopifyGraphQL(`
+      query($themeId: ID!, $filenames: [String!]!) {
+        theme(id: $themeId) {
+          files(filenames: $filenames, first: 1) {
+            nodes {
+              filename
+              size
+              body {
+                ... on OnlineStoreThemeFileBodyText {
+                  content
+                }
+              }
+            }
+          }
+        }
+      }
+    `, { themeId: mainTheme.id, filenames: [key] });
+    
+    const file = fileData?.theme?.files?.nodes?.[0];
+    if (!file) return res.status(404).json({ error: 'File not found' });
+    
+    res.json({ success: true, filename: file.filename, content: file.body?.content || '', size: file.size });
+  } catch (error) {
+    console.error('Get theme file error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/update-theme-file', async (req, res) => {
+  try {
+    const { key, content } = req.body;
+    if (!key || !content) return res.status(400).json({ error: 'key and content required' });
+    
+    // Get active theme ID
+    const themesData = await shopifyGraphQL(`
+      query {
+        themes(first: 10, roles: [MAIN]) {
+          nodes {
+            id
+            name
+            role
+          }
+        }
+      }
+    `);
+    
+    const mainTheme = themesData?.themes?.nodes?.[0];
+    if (!mainTheme) return res.status(404).json({ error: 'No main theme found' });
+    
+    // Update the file
+    const result = await shopifyGraphQL(`
+      mutation themeFilesUpsert($themeId: ID!, $files: [OnlineStoreThemeFilesUpsertFileInput!]!) {
+        themeFilesUpsert(themeId: $themeId, files: $files) {
+          upsertedThemeFiles {
+            filename
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `, {
+      themeId: mainTheme.id,
+      files: [{
+        filename: key,
+        body: {
+          type: "TEXT",
+          value: content
+        }
+      }]
+    });
+    
+    if (result?.themeFilesUpsert?.userErrors?.length > 0) {
+      return res.status(500).json({ error: 'Failed to update theme file', details: result.themeFilesUpsert.userErrors });
+    }
+    
+    res.json({ success: true, filename: key });
+  } catch (error) {
+    console.error('Update theme file error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ─── Start server ─────────────────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 3001;
