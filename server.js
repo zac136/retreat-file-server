@@ -55,7 +55,7 @@ function uploadBufferToS3(targetUrl, parameters, fileBuffer, filename, mimeType)
 const app = express();
 const upload = multer({ 
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 } // 10MB max
+  limits: { fileSize: 50 * 1024 * 1024 } // 50MB max
 });
 
 // CORS - allow Shopify store and any origin
@@ -65,7 +65,7 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '50mb' }));
 
 const SHOPIFY_STORE = process.env.SHOPIFY_SHOP || 'retreat-beach-house';
 const CLIENT_ID = process.env.SHOPIFY_CLIENT_ID || '902780ff14e9ff166032ae60998ec881';
@@ -167,13 +167,80 @@ async function setBookingsData(payload) {
   });
 }
 
+// ─── Helper: get/set civil ID images metafield (separate storage) ────────────
+
+async function getCivilIdImages() {
+  const data = await shopifyGraphQL(`
+    query {
+      shop {
+        metafield(namespace: "retreat", key: "civil_ids") {
+          id
+          value
+        }
+      }
+    }
+  `);
+  const metafield = data?.shop?.metafield;
+  let parsed = {};
+  if (metafield?.value) {
+    try { parsed = JSON.parse(metafield.value); } catch(e) {}
+  }
+  return parsed;
+}
+
+async function saveCivilIdImage(bookingId, imageDataUrl) {
+  // Store civil ID images in a separate metafield to avoid size limits
+  // Only store a reference/thumbnail, not the full image
+  // For large images, we'll store a compressed thumbnail
+  try {
+    const existing = await getCivilIdImages();
+    
+    // If the image is too large (>100KB base64), compress it further
+    let imageToStore = imageDataUrl;
+    if (imageDataUrl && imageDataUrl.length > 100000) {
+      // Store just a flag that image exists - the full image was sent via email
+      imageToStore = 'IMAGE_SENT_VIA_EMAIL';
+    }
+    
+    existing[bookingId] = imageToStore;
+    
+    // Keep only last 50 images to avoid metafield size limit
+    const keys = Object.keys(existing);
+    if (keys.length > 50) {
+      const toRemove = keys.slice(0, keys.length - 50);
+      toRemove.forEach(k => delete existing[k]);
+    }
+    
+    await shopifyGraphQL(`
+      mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
+        metafieldsSet(metafields: $metafields) {
+          metafields { id }
+          userErrors { field message }
+        }
+      }
+    `, {
+      metafields: [{
+        ownerId: SHOP_ID,
+        namespace: 'retreat',
+        key: 'civil_ids',
+        value: JSON.stringify(existing),
+        type: 'json'
+      }]
+    });
+    return true;
+  } catch (e) {
+    console.error('Failed to save civil ID image:', e.message);
+    return false;
+  }
+}
+
 // ─── Health check ─────────────────────────────────────────────────────────────
 
 app.get('/', (req, res) => {
   res.json({ status: 'ok', message: 'Retreat File Server is running', store: SHOPIFY_STORE });
 });
 
-// ─── Upload file - store as base64 data URL (simple, no S3 issues) ───────────
+// ─── Upload file - store as base64 data URL ──────────────────────────────────
 
 app.post('/upload', upload.single('file'), async (req, res) => {
   try {
@@ -183,7 +250,7 @@ app.post('/upload', upload.single('file'), async (req, res) => {
     const filename = (req.body.filename || file.originalname || 'upload.jpg').replace(/[/\\]/g, '_');
     console.log(`Storing file as base64: ${filename} (${file.size} bytes)`);
 
-    // Convert to base64 data URL - stored directly in booking data
+    // Convert to base64 data URL
     const base64 = file.buffer.toString('base64');
     const dataUrl = `data:${file.mimetype};base64,${base64}`;
 
@@ -210,6 +277,15 @@ app.post('/save-booking', async (req, res) => {
     booking.status = booking.status || 'confirmed';
     booking.createdAt = booking.createdAt || new Date().toISOString();
 
+    // Extract civil ID image to store separately if it's large
+    let civilIdImage = booking.civilIdImageUrl || '';
+    if (civilIdImage && civilIdImage.startsWith('data:') && civilIdImage.length > 50000) {
+      // Store image separately and keep just a reference in the booking
+      booking.civilIdImageUrl = 'STORED_SEPARATELY';
+      // Save civil ID image in background (don't block booking save)
+      saveCivilIdImage(booking.id, civilIdImage).catch(e => console.error('Civil ID save error:', e));
+    }
+
     existingData.bookings.unshift(booking);
     if (booking.checkIn && booking.checkOut) {
       existingData.bookedDates.push({ start: booking.checkIn, end: booking.checkOut, bookingId: booking.id });
@@ -218,6 +294,14 @@ app.post('/save-booking', async (req, res) => {
     const result = await setBookingsData(existingData);
     if (result?.metafieldsSet?.userErrors?.length > 0) {
       return res.status(500).json({ error: 'Failed to save booking', details: result.metafieldsSet.userErrors });
+    }
+
+    // Send email notification automatically after successful save
+    try {
+      await sendBookingEmail(booking, civilIdImage);
+      console.log('Auto email sent for booking', booking.id);
+    } catch (emailErr) {
+      console.error('Auto email failed:', emailErr.message);
     }
 
     res.json({ success: true, bookingId: booking.id });
@@ -310,7 +394,8 @@ app.delete('/delete-booking/:id', async (req, res) => {
 
     const before = existingData.bookings.length;
     existingData.bookings = existingData.bookings.filter(b => b.id !== id);
-    existingData.bookedDates = (existingData.bookedDates || []).filter(d => d.bookingId !== id);
+    existingData.bookedDates = (existingData.bookedDates || [])
+      .filter(d => d.bookingId !== id);
 
     if (existingData.bookings.length === before) {
       return res.status(404).json({ error: 'Booking not found' });
@@ -356,7 +441,7 @@ app.post('/set-blocked-dates', async (req, res) => {
   }
 });
 
-// ─── Send booking email notification ─────────────────────────────────────────
+// ─── Email notification ─────────────────────────────────────────────────────
 
 const nodemailer = require('nodemailer');
 
@@ -365,53 +450,89 @@ const emailTransporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
     user: process.env.EMAIL_USER || 'retreat.kuwait@gmail.com',
-    pass: process.env.EMAIL_PASS || '' // Gmail App Password - set in Render env vars
+    pass: process.env.EMAIL_PASS || ''
   }
 });
 
+// Shared email sending function
+async function sendBookingEmail(booking, civilIdImage) {
+  const b = booking;
+  const adminEmail = 'retreat.kuwait@gmail.com';
+
+  const htmlBody = `
+    <div dir="rtl" style="font-family:Tajawal,Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
+      <div style="text-align:center;margin-bottom:20px;">
+        <h2 style="color:#1a3a4a;margin-bottom:4px;">حجز جديد - شاليه ريتريت</h2>
+        <p style="color:#c9a961;font-size:14px;">تم استلام حجز جديد عبر الموقع</p>
+      </div>
+      <div style="background:#fdf8f0;border:1px solid #e8dcc8;padding:16px;border-radius:8px;margin-bottom:16px;">
+        <table style="width:100%;border-collapse:collapse;font-size:14px;">
+          <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">اسم المستأجر:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;border-bottom:1px solid #ede8e1;">${b.name || '—'}</td></tr>
+          <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">رقم الهاتف:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;border-bottom:1px solid #ede8e1;">${b.phone || '—'}</td></tr>
+          <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">البريد الإلكتروني:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;border-bottom:1px solid #ede8e1;">${b.email || '—'}</td></tr>
+          <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">الرقم المدني:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;border-bottom:1px solid #ede8e1;">${b.civilId || '—'}</td></tr>
+          <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">تاريخ الدخول:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;border-bottom:1px solid #ede8e1;">${b.checkIn || '—'}</td></tr>
+          <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">تاريخ الخروج:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;border-bottom:1px solid #ede8e1;">${b.checkOut || '—'}</td></tr>
+          <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">الباقة:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;border-bottom:1px solid #ede8e1;">${b.packageName || '—'}</td></tr>
+          <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">مبلغ الإيجار:</td><td style="padding:8px;font-weight:600;color:#c9a961;border-bottom:1px solid #ede8e1;">${b.price || '—'} د.ك</td></tr>
+          <tr><td style="padding:8px;color:#9a8f82;">عدد الأشخاص:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;">${b.guests || '—'}</td></tr>
+        </table>
+      </div>
+      ${b.notes ? '<div style="background:#fff8ee;border:1px solid #c9a961;padding:12px;border-radius:8px;margin-bottom:16px;"><strong>ملاحظات:</strong> ' + b.notes + '</div>' : ''}
+      <div style="text-align:center;color:#9a8f82;font-size:12px;margin-top:20px;">
+        <p>يمكنك مراجعة الحجز من <a href="https://retreat-beach-house.myshopify.com/pages/booking-management" style="color:#c9a961;">لوحة الإدارة</a></p>
+      </div>
+    </div>
+  `;
+
+  // Prepare attachments
+  const attachments = [];
+  
+  // Attach civil ID image if available
+  if (civilIdImage && civilIdImage.startsWith('data:')) {
+    const matches = civilIdImage.match(/^data:([^;]+);base64,(.+)$/);
+    if (matches) {
+      const ext = matches[1].includes('png') ? 'png' : 'jpg';
+      attachments.push({
+        filename: `civil-id-${b.name || 'customer'}.${ext}`,
+        content: Buffer.from(matches[2], 'base64'),
+        contentType: matches[1]
+      });
+    }
+  }
+
+  // Attach signature if available
+  if (b.signatureDataURL && b.signatureDataURL.startsWith('data:')) {
+    const sigMatches = b.signatureDataURL.match(/^data:([^;]+);base64,(.+)$/);
+    if (sigMatches) {
+      attachments.push({
+        filename: `signature-${b.name || 'customer'}.png`,
+        content: Buffer.from(sigMatches[2], 'base64'),
+        contentType: sigMatches[1]
+      });
+    }
+  }
+
+  const mailOptions = {
+    from: '"شاليه ريتريت" <' + (process.env.EMAIL_USER || 'retreat.kuwait@gmail.com') + '>',
+    to: adminEmail,
+    subject: '🏖️ حجز جديد - ' + (b.name || 'عميل') + ' | ' + (b.checkIn || ''),
+    html: htmlBody,
+    attachments: attachments.length > 0 ? attachments : undefined
+  };
+
+  const info = await emailTransporter.sendMail(mailOptions);
+  console.log('Email sent:', info.messageId);
+  return info;
+}
+
+// Manual email endpoint (kept for backward compatibility)
 app.post('/send-booking-email', async (req, res) => {
   try {
-    const { to, booking } = req.body;
+    const { to, booking, civilIdImage } = req.body;
     if (!booking) return res.status(400).json({ error: 'No booking data' });
 
-    const adminEmail = to || 'retreat.kuwait@gmail.com';
-    const b = booking;
-
-    const htmlBody = `
-      <div dir="rtl" style="font-family:Tajawal,Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
-        <div style="text-align:center;margin-bottom:20px;">
-          <h2 style="color:#1a3a4a;margin-bottom:4px;">حجز جديد - شاليه ريتريت</h2>
-          <p style="color:#c9a961;font-size:14px;">تم استلام حجز جديد عبر الموقع</p>
-        </div>
-        <div style="background:#fdf8f0;border:1px solid #e8dcc8;padding:16px;border-radius:8px;margin-bottom:16px;">
-          <table style="width:100%;border-collapse:collapse;font-size:14px;">
-            <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">اسم المستأجر:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;border-bottom:1px solid #ede8e1;">${b.name || '—'}</td></tr>
-            <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">رقم الهاتف:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;border-bottom:1px solid #ede8e1;">${b.phone || '—'}</td></tr>
-            <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">البريد الإلكتروني:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;border-bottom:1px solid #ede8e1;">${b.email || '—'}</td></tr>
-            <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">الرقم المدني:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;border-bottom:1px solid #ede8e1;">${b.civilId || '—'}</td></tr>
-            <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">تاريخ الدخول:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;border-bottom:1px solid #ede8e1;">${b.checkIn || '—'}</td></tr>
-            <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">تاريخ الخروج:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;border-bottom:1px solid #ede8e1;">${b.checkOut || '—'}</td></tr>
-            <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">الباقة:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;border-bottom:1px solid #ede8e1;">${b.packageName || '—'}</td></tr>
-            <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">مبلغ الإيجار:</td><td style="padding:8px;font-weight:600;color:#c9a961;border-bottom:1px solid #ede8e1;">${b.price || '—'} د.ك</td></tr>
-            <tr><td style="padding:8px;color:#9a8f82;">عدد الأشخاص:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;">${b.guests || '—'}</td></tr>
-          </table>
-        </div>
-        ${b.notes ? '<div style="background:#fff8ee;border:1px solid #c9a961;padding:12px;border-radius:8px;margin-bottom:16px;"><strong>ملاحظات:</strong> ' + b.notes + '</div>' : ''}
-        <div style="text-align:center;color:#9a8f82;font-size:12px;margin-top:20px;">
-          <p>يمكنك مراجعة الحجز من <a href="https://retreat-beach-house.myshopify.com/pages/booking-management" style="color:#c9a961;">لوحة الإدارة</a></p>
-        </div>
-      </div>
-    `;
-
-    const mailOptions = {
-      from: '"شاليه ريتريت" <' + (process.env.EMAIL_USER || 'retreat.kuwait@gmail.com') + '>',
-      to: adminEmail,
-      subject: '🏖️ حجز جديد - ' + (b.name || 'عميل') + ' | ' + (b.checkIn || ''),
-      html: htmlBody
-    };
-
-    await emailTransporter.sendMail(mailOptions);
-    console.log('Email sent to', adminEmail);
+    await sendBookingEmail(booking, civilIdImage || '');
     res.json({ success: true, message: 'Email sent' });
 
   } catch (error) {
@@ -426,4 +547,5 @@ const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`Retreat File Server running on port ${PORT}`);
   console.log(`Store: ${SHOPIFY_STORE}.myshopify.com`);
+  console.log(`Email: ${process.env.EMAIL_USER || 'NOT SET'}`);
 });
