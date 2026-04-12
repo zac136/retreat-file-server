@@ -160,6 +160,46 @@ async function setCivilIdImages(imagesMap) {
   });
 }
 
+// ─── Helper: get/set signatures in separate metafield ─────────────────────
+
+async function getSignatures() {
+  const data = await shopifyGraphQL(`
+    query {
+      shop {
+        metafield(namespace: "retreat", key: "signatures") {
+          id
+          value
+        }
+      }
+    }
+  `);
+  const metafield = data?.shop?.metafield;
+  let parsed = {};
+  if (metafield?.value) {
+    try { parsed = JSON.parse(metafield.value); } catch(e) {}
+  }
+  return parsed;
+}
+
+async function setSignatures(sigMap) {
+  return shopifyGraphQL(`
+    mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
+      metafieldsSet(metafields: $metafields) {
+        metafields { id key value }
+        userErrors { field message }
+      }
+    }
+  `, {
+    metafields: [{
+      ownerId: SHOP_ID,
+      namespace: 'retreat',
+      key: 'signatures',
+      value: JSON.stringify(sigMap),
+      type: 'json'
+    }]
+  });
+}
+
 // ─── Health check ─────────────────────────────────────────────────────────────
 
 app.get('/', (req, res) => {
@@ -272,12 +312,24 @@ app.get('/get-bookings', async (req, res) => {
       console.error('Failed to load civil ID images:', e.message);
     }
     
-    // Restore images into bookings
+    // Merge signatures from separate metafield
+    let sigMap = {};
+    try {
+      sigMap = await getSignatures();
+    } catch (e) {
+      console.error('Failed to load signatures:', e.message);
+    }
+
+    // Restore images and signatures into bookings
     const bookings = (data.bookings || []).map(b => {
+      let updated = b;
       if (b.civilIdImageUrl === 'STORED_IN_IMAGES' && imagesMap[b.id]) {
-        return { ...b, civilIdImageUrl: imagesMap[b.id] };
+        updated = { ...updated, civilIdImageUrl: imagesMap[b.id] };
       }
-      return b;
+      if (b.signatureDataURL === 'STORED_IN_SIGNATURES' && sigMap[b.id]) {
+        updated = { ...updated, signatureDataURL: sigMap[b.id] };
+      }
+      return updated;
     });
     
     res.json({ success: true, bookings, bookedDates: data.bookedDates || [], blockedDates: data.blockedDates || [] });
@@ -377,16 +429,32 @@ app.post('/sign/:token', async (req, res) => {
       return res.status(400).json({ error: 'تم التوقيع على هذا العقد مسبقاً' });
     }
 
-    // Save the signature
-    existingData.bookings[idx].signatureDataURL = signatureDataURL;
+    // Save the signature in separate metafield to avoid size limits
+    const bookingId = existingData.bookings[idx].id;
+    try {
+      const sigMap = await getSignatures();
+      sigMap[bookingId] = signatureDataURL;
+      // Keep only last 30 signatures
+      const keys = Object.keys(sigMap);
+      if (keys.length > 30) {
+        keys.slice(0, keys.length - 30).forEach(k => delete sigMap[k]);
+      }
+      await setSignatures(sigMap);
+    } catch (sigErr) {
+      console.error('Failed to save signature to separate metafield:', sigErr.message);
+      return res.status(500).json({ error: 'Failed to save signature image' });
+    }
+
+    // Mark booking as signed (store reference, not the actual image)
+    existingData.bookings[idx].signatureDataURL = 'STORED_IN_SIGNATURES';
     existingData.bookings[idx].signedAt = new Date().toISOString();
 
     const result = await setBookingsData(existingData);
     if (result?.metafieldsSet?.userErrors?.length > 0) {
-      return res.status(500).json({ error: 'Failed to save signature' });
+      console.error('Failed to update booking record:', result.metafieldsSet.userErrors);
     }
 
-    console.log(`✅ Signature saved for booking ${existingData.bookings[idx].id} via token`);
+    console.log(`✅ Signature saved for booking ${bookingId} via token`);
     res.json({ success: true, message: 'تم حفظ التوقيع بنجاح' });
   } catch (error) {
     console.error('Submit signature error:', error);
