@@ -3,6 +3,7 @@ const multer = require('multer');
 const cors = require('cors');
 const fetch = require('node-fetch');
 const { URLSearchParams } = require('url');
+const crypto = require('crypto');
 
 const app = express();
 const upload = multer({ 
@@ -202,6 +203,11 @@ app.post('/save-booking', async (req, res) => {
     booking.status = booking.status || 'confirmed';
     booking.createdAt = booking.createdAt || new Date().toISOString();
 
+    // Generate signature token for manual bookings (so admin can send signing link)
+    if (booking.source === 'manual' && !booking.signatureToken) {
+      booking.signatureToken = crypto.randomBytes(16).toString('hex');
+    }
+
     // Handle civil ID image - store in separate metafield to avoid size issues
     let civilIdImage = booking.civilIdImageUrl || '';
     if (civilIdImage && civilIdImage.startsWith('data:') && civilIdImage.length > 1000) {
@@ -224,8 +230,6 @@ app.post('/save-booking', async (req, res) => {
         booking.civilIdImageUrl = 'STORED_IN_IMAGES';
       } catch (imgErr) {
         console.error('Failed to save civil ID image separately:', imgErr.message);
-        // Fallback: keep the base64 in the booking itself
-        // (will work if total data is under 5MB)
       }
     }
 
@@ -247,7 +251,7 @@ app.post('/save-booking', async (req, res) => {
       console.error('Auto email failed:', emailErr.message);
     }
 
-    res.json({ success: true, bookingId: booking.id });
+    res.json({ success: true, bookingId: booking.id, signatureToken: booking.signatureToken || null });
   } catch (error) {
     console.error('Save booking error:', error);
     res.status(500).json({ error: error.message });
@@ -297,6 +301,93 @@ app.get('/get-civil-id/:bookingId', async (req, res) => {
     }
   } catch (error) {
     console.error('Get civil ID error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Signature System: Get booking info by token (for customer signing page) ──
+
+app.get('/sign/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+    if (!token) return res.status(400).json({ error: 'Token required' });
+
+    const { data } = await getBookingsData();
+    const booking = (data.bookings || []).find(b => b.signatureToken === token);
+    
+    if (!booking) {
+      return res.status(404).json({ error: 'رابط التوقيع غير صالح أو منتهي الصلاحية' });
+    }
+
+    if (booking.signatureDataURL) {
+      return res.json({ 
+        success: true, 
+        alreadySigned: true, 
+        booking: {
+          name: booking.name,
+          checkIn: booking.checkIn,
+          checkOut: booking.checkOut,
+          price: booking.price,
+          guests: booking.guests
+        }
+      });
+    }
+
+    // Return booking info (limited - no sensitive data)
+    res.json({ 
+      success: true, 
+      alreadySigned: false,
+      booking: {
+        id: booking.id,
+        name: booking.name,
+        phone: booking.phone,
+        checkIn: booking.checkIn,
+        checkOut: booking.checkOut,
+        price: booking.price,
+        guests: booking.guests,
+        package: booking.package
+      }
+    });
+  } catch (error) {
+    console.error('Get signing info error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Signature System: Submit signature ──────────────────────────────────────
+
+app.post('/sign/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+    const { signatureDataURL } = req.body;
+    
+    if (!token) return res.status(400).json({ error: 'Token required' });
+    if (!signatureDataURL) return res.status(400).json({ error: 'Signature data required' });
+
+    const { data: existingData } = await getBookingsData();
+    const idx = (existingData.bookings || []).findIndex(b => b.signatureToken === token);
+    
+    if (idx === -1) {
+      return res.status(404).json({ error: 'رابط التوقيع غير صالح أو منتهي الصلاحية' });
+    }
+
+    if (existingData.bookings[idx].signatureDataURL) {
+      return res.status(400).json({ error: 'تم التوقيع على هذا العقد مسبقاً' });
+    }
+
+    // Save the signature
+    existingData.bookings[idx].signatureDataURL = signatureDataURL;
+    existingData.bookings[idx].signedAt = new Date().toISOString();
+
+    const result = await setBookingsData(existingData);
+    if (result?.metafieldsSet?.userErrors?.length > 0) {
+      return res.status(500).json({ error: 'Failed to save signature' });
+    }
+
+    console.log(`✅ Signature saved for booking ${existingData.bookings[idx].id} via token`);
+    res.json({ success: true, message: 'تم حفظ التوقيع بنجاح' });
+  } catch (error) {
+    console.error('Submit signature error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -444,6 +535,227 @@ app.post('/set-blocked-dates', async (req, res) => {
     console.error('Set blocked dates error:', error);
     res.status(500).json({ error: error.message });
   }
+});
+
+// ─── Signing page (serves HTML for customer to sign) ─────────────────────────
+
+app.get('/sign-page/:token', (req, res) => {
+  const { token } = req.params;
+  res.send(`<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>توقيع العقد - شاليه ريتريت</title>
+<link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Tajawal', Arial, sans-serif; background: #f6f3ee; color: #2d2d2d; min-height: 100vh; }
+.container { max-width: 600px; margin: 0 auto; padding: 20px 16px; }
+.logo-section { text-align: center; padding: 24px 0 16px; }
+.logo-section img { width: 140px; margin-bottom: 8px; }
+.logo-section h1 { font-size: 20px; color: #1a3a4a; font-weight: 700; }
+.logo-section p { color: #9a8f82; font-size: 13px; }
+.card { background: #fff; border-radius: 12px; padding: 20px; margin-bottom: 16px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
+.card h2 { font-size: 16px; color: #1a3a4a; margin-bottom: 12px; border-bottom: 2px solid #c9a961; padding-bottom: 8px; }
+.info-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f0ebe4; font-size: 14px; }
+.info-row:last-child { border-bottom: none; }
+.info-row .label { color: #7a7060; }
+.info-row .value { color: #1a3a4a; font-weight: 600; }
+.terms-card { background: #fff; border-radius: 12px; padding: 20px; margin-bottom: 16px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
+.terms-card h2 { font-size: 16px; color: #1a3a4a; margin-bottom: 12px; border-bottom: 2px solid #c9a961; padding-bottom: 8px; }
+.terms-card ol { padding-right: 20px; font-size: 12px; line-height: 1.6; color: #4a4540; }
+.terms-card li { margin-bottom: 4px; }
+.sig-card { background: #fff; border-radius: 12px; padding: 20px; margin-bottom: 16px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); text-align: center; }
+.sig-card h2 { font-size: 16px; color: #1a3a4a; margin-bottom: 4px; }
+.sig-card p { color: #9a8f82; font-size: 13px; margin-bottom: 12px; }
+canvas { border: 2px dashed #c9a961; border-radius: 8px; background: #fefcf9; touch-action: none; width: 100%; max-width: 500px; }
+.btn-row { display: flex; gap: 10px; margin-top: 12px; justify-content: center; }
+.btn { padding: 12px 28px; border: none; border-radius: 8px; font-size: 15px; font-family: 'Tajawal', sans-serif; cursor: pointer; font-weight: 600; }
+.btn-primary { background: #c9a961; color: #fff; }
+.btn-primary:disabled { background: #d4c9a8; cursor: not-allowed; }
+.btn-secondary { background: #e8e2d8; color: #5a5045; }
+.success-msg { text-align: center; padding: 40px 20px; }
+.success-msg .icon { font-size: 60px; margin-bottom: 16px; }
+.success-msg h2 { color: #1a3a4a; margin-bottom: 8px; }
+.success-msg p { color: #7a7060; font-size: 14px; }
+.already-signed { text-align: center; padding: 40px 20px; }
+.already-signed .icon { font-size: 50px; margin-bottom: 12px; }
+.error-msg { text-align: center; padding: 40px 20px; color: #c0392b; }
+.loading { text-align: center; padding: 60px 20px; color: #9a8f82; }
+.loading .spinner { width: 40px; height: 40px; border: 3px solid #e8e2d8; border-top: 3px solid #c9a961; border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 16px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.ack-box { background: #fdf8f0; border: 1px solid #c9a961; border-radius: 8px; padding: 10px 14px; margin: 12px 0; font-size: 12px; color: #5a5045; text-align: center; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="logo-section">
+    <img src="https://files.manuscdn.com/user_upload_by_module/session_file/310519663530851339/roNCVxbVgYKQtCRp.png" alt="Retreat Logo">
+    <h1>توقيع عقد الإيجار</h1>
+    <p>شاليه ريتريت - الخيران، المرحلة الخامسة</p>
+  </div>
+  <div id="content"><div class="loading"><div class="spinner"></div><p>جاري تحميل بيانات الحجز...</p></div></div>
+</div>
+<script>
+const TOKEN = '${token}';
+const SERVER = window.location.origin;
+
+const TERMS = [
+  'تعتمد بيانات الحجز المدخلة من المستأجر، وأي بيانات غير صحيحة أو مضللة تخول للمؤجر إلغاء الحجز أو رفض الدخول دون تعويض. التأجير للعوائل فقط.',
+  'وقت الدخول بعد الساعة 2:00 مساءً، ووقت الخروج بحد أقصى الساعة 2:00 مساءً، ويترتب على التأخر عن الخروج مبلغ 25 د.ك عن كل ساعة ويخصم من التأمين.',
+  'يلتزم المستأجر بدفع كامل مبلغ الإيجار إضافة إلى مبلغ تأمين قدره 100 د.ك، ويعاد التأمين خلال 48 ساعة بعد المعاينة، مع أحقية المؤجر بخصم أي أضرار أو تنظيف إضافي.',
+  'الحد الأقصى المسموح به داخل الشاليه هو 8 أشخاص وعاملتين فقط، ويمنع إدخال أي أشخاص غير مذكورين في بيانات الحجز.',
+  'يلتزم المستأجر بالمحافظة على نظافة الشاليه ومرافقه ومحتوياته، ويحق للمؤجر خصم رسوم تنظيف عند تركه بحالة غير مناسبة.',
+  'المستأجر مسؤول مسؤولية كاملة عن أي أضرار أو تلفيات أو فقدان خلال مدة الإيجار، وفي حال تجاوز قيمة الأضرار مبلغ التأمين يلتزم المستأجر بسداد الفرق.',
+  'يلتزم المستأجر بالمحافظة على الهدوء وعدم إزعاج الجيران، ويمنع استخدام مكبرات الصوت أو أي تصرف بسبب شكاوى.',
+  'يكون استخدام المسبح على مسؤولية المستأجر بالكامل، مع ضرورة مراقبة الأطفال، ويخلي المستأجر مسؤولية المؤجر عن أي حوادث ناتجة عن سوء الاستخدام أو الإهمال.',
+  'يمنع منعاً باتاً التدخين داخل الشاليه، وإدخال الحيوانات، وإقامة الحفلات أو التجمعات، واللعب بالممتلكات أو ممارسة أي نشاط مخالف للقانون أو الآداب العامة.',
+  'في حال حدوث أي عطل يلتزم المستأجر بإبلاغ المؤجر فوراً، ولا يجوز له إجراء أي إصلاح أو تعديل دون موافقة مسبقة من المؤجر.',
+  'سياسة الإلغاء: أكثر من أسبوعين استرجاع كامل المبلغ، وقبل أسبوعين خصم 30%، وقبل أسبوع خصم 50%، وأقل من أسبوع أو عدم الحضور لا يوجد استرجاع.',
+  'يحق للمؤجر رفض الدخول أو إنهاء الحجز فوراً عند مخالفة الشروط أو تجاوز العدد المسموح أو الإزعاج أو عدم دفع كامل المبلغ، كما يمنع تأجير الشاليه من الباطن أو التنازل عنه للغير.'
+];
+
+async function loadBooking() {
+  try {
+    const resp = await fetch(SERVER + '/sign/' + TOKEN);
+    const data = await resp.json();
+    
+    if (!data.success) {
+      document.getElementById('content').innerHTML = '<div class="error-msg"><h2>❌</h2><p>' + (data.error || 'رابط غير صالح') + '</p></div>';
+      return;
+    }
+
+    if (data.alreadySigned) {
+      const b = data.booking;
+      document.getElementById('content').innerHTML = '<div class="already-signed"><div class="icon">✅</div><h2>تم التوقيع مسبقاً</h2><p>تم توقيع عقد الحجز الخاص بـ <strong>' + b.name + '</strong> بنجاح.</p><p style="margin-top:8px;color:#c9a961;">شكراً لك - شاليه ريتريت</p></div>';
+      return;
+    }
+
+    const b = data.booking;
+    let html = '';
+    
+    // Booking info card
+    html += '<div class="card"><h2>📋 بيانات الحجز</h2>';
+    html += '<div class="info-row"><span class="label">الاسم:</span><span class="value">' + b.name + '</span></div>';
+    html += '<div class="info-row"><span class="label">تاريخ الدخول:</span><span class="value">' + b.checkIn + '</span></div>';
+    html += '<div class="info-row"><span class="label">تاريخ الخروج:</span><span class="value">' + b.checkOut + '</span></div>';
+    html += '<div class="info-row"><span class="label">مبلغ الإيجار:</span><span class="value">' + b.price + '</span></div>';
+    html += '<div class="info-row"><span class="label">عدد الأشخاص:</span><span class="value">' + (b.guests || '—') + '</span></div>';
+    html += '</div>';
+
+    // Terms card
+    html += '<div class="terms-card"><h2>📜 الشروط والأحكام</h2><ol>';
+    TERMS.forEach(t => { html += '<li>' + t + '</li>'; });
+    html += '</ol>';
+    html += '<div class="ack-box">يقر المستأجر بأنه قرأ هذه الشروط والأحكام وفهمها ووافق عليها ويلتزم بجميع ما ورد فيها.</div>';
+    html += '</div>';
+
+    // Signature card
+    html += '<div class="sig-card"><h2>✍️ التوقيع</h2><p>ارسم توقيعك في المربع أدناه</p>';
+    html += '<canvas id="sig-canvas" width="460" height="180"></canvas>';
+    html += '<div class="btn-row"><button class="btn btn-primary" id="submit-btn" onclick="submitSignature()" disabled>✅ تأكيد التوقيع</button>';
+    html += '<button class="btn btn-secondary" onclick="clearCanvas()">🗑️ مسح</button></div></div>';
+
+    document.getElementById('content').innerHTML = html;
+    initCanvas();
+  } catch (err) {
+    document.getElementById('content').innerHTML = '<div class="error-msg"><h2>❌</h2><p>خطأ في الاتصال بالسيرفر</p></div>';
+  }
+}
+
+let canvas, ctx, drawing = false, hasDrawn = false;
+
+function initCanvas() {
+  canvas = document.getElementById('sig-canvas');
+  ctx = canvas.getContext('2d');
+  
+  // Set canvas size based on container
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * 2;
+  canvas.height = 360;
+  canvas.style.height = '180px';
+  ctx.scale(2, 2);
+  ctx.strokeStyle = '#1a3a4a';
+  ctx.lineWidth = 2.5;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  // Mouse events
+  canvas.addEventListener('mousedown', startDraw);
+  canvas.addEventListener('mousemove', draw);
+  canvas.addEventListener('mouseup', stopDraw);
+  canvas.addEventListener('mouseleave', stopDraw);
+  
+  // Touch events
+  canvas.addEventListener('touchstart', function(e) { e.preventDefault(); startDraw(e.touches[0]); }, { passive: false });
+  canvas.addEventListener('touchmove', function(e) { e.preventDefault(); draw(e.touches[0]); }, { passive: false });
+  canvas.addEventListener('touchend', function(e) { e.preventDefault(); stopDraw(); }, { passive: false });
+}
+
+function getPos(e) {
+  const rect = canvas.getBoundingClientRect();
+  return { x: (e.clientX - rect.left), y: (e.clientY - rect.top) };
+}
+
+function startDraw(e) {
+  drawing = true;
+  const pos = getPos(e);
+  ctx.beginPath();
+  ctx.moveTo(pos.x, pos.y);
+}
+
+function draw(e) {
+  if (!drawing) return;
+  hasDrawn = true;
+  document.getElementById('submit-btn').disabled = false;
+  const pos = getPos(e);
+  ctx.lineTo(pos.x, pos.y);
+  ctx.stroke();
+}
+
+function stopDraw() { drawing = false; }
+
+function clearCanvas() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  hasDrawn = false;
+  document.getElementById('submit-btn').disabled = true;
+}
+
+async function submitSignature() {
+  if (!hasDrawn) return;
+  
+  const btn = document.getElementById('submit-btn');
+  btn.disabled = true;
+  btn.textContent = 'جاري الحفظ...';
+  
+  try {
+    const dataURL = canvas.toDataURL('image/png');
+    const resp = await fetch(SERVER + '/sign/' + TOKEN, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ signatureDataURL: dataURL })
+    });
+    const result = await resp.json();
+    
+    if (result.success) {
+      document.getElementById('content').innerHTML = '<div class="success-msg"><div class="icon">✅</div><h2>تم التوقيع بنجاح!</h2><p>شكراً لك، تم حفظ توقيعك على عقد الإيجار.</p><p style="margin-top:12px;color:#c9a961;font-weight:600;">شاليه ريتريت - نتمنى لك إقامة ممتعة 🏖️</p></div>';
+    } else {
+      btn.disabled = false;
+      btn.textContent = '✅ تأكيد التوقيع';
+      alert(result.error || 'حدث خطأ');
+    }
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = '✅ تأكيد التوقيع';
+    alert('خطأ في الاتصال بالسيرفر');
+  }
+}
+
+loadBooking();
+</script>
+</body>
+</html>`);
 });
 
 // ─── Email notification ─────────────────────────────────────────────────────
