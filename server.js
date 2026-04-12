@@ -167,70 +167,124 @@ async function setBookingsData(payload) {
   });
 }
 
-// ─── Helper: get/set civil ID images metafield (separate storage) ────────────
+// ─── Helper: Upload image to Shopify Files (persistent storage) ─────────────
 
-async function getCivilIdImages() {
-  const data = await shopifyGraphQL(`
-    query {
-      shop {
-        metafield(namespace: "retreat", key: "civil_ids") {
-          id
-          value
-        }
-      }
-    }
-  `);
-  const metafield = data?.shop?.metafield;
-  let parsed = {};
-  if (metafield?.value) {
-    try { parsed = JSON.parse(metafield.value); } catch(e) {}
-  }
-  return parsed;
-}
-
-async function saveCivilIdImage(bookingId, imageDataUrl) {
-  // Store civil ID images in a separate metafield to avoid size limits
-  // Only store a reference/thumbnail, not the full image
-  // For large images, we'll store a compressed thumbnail
+async function uploadImageToShopifyFiles(imageDataUrl, filename) {
   try {
-    const existing = await getCivilIdImages();
-    
-    // If the image is too large (>100KB base64), compress it further
-    let imageToStore = imageDataUrl;
-    if (imageDataUrl && imageDataUrl.length > 100000) {
-      // Store just a flag that image exists - the full image was sent via email
-      imageToStore = 'IMAGE_SENT_VIA_EMAIL';
+    // Extract mime type and base64 data
+    const matches = imageDataUrl.match(/^data:([^;]+);base64,(.+)$/);
+    if (!matches) {
+      console.error('Invalid data URL format');
+      return null;
     }
-    
-    existing[bookingId] = imageToStore;
-    
-    // Keep only last 50 images to avoid metafield size limit
-    const keys = Object.keys(existing);
-    if (keys.length > 50) {
-      const toRemove = keys.slice(0, keys.length - 50);
-      toRemove.forEach(k => delete existing[k]);
-    }
-    
-    await shopifyGraphQL(`
-      mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
-        metafieldsSet(metafields: $metafields) {
-          metafields { id }
+    const mimeType = matches[1];
+    const base64Data = matches[2];
+    const fileBuffer = Buffer.from(base64Data, 'base64');
+    const ext = mimeType.includes('png') ? 'png' : 'jpg';
+    const fullFilename = `${filename}.${ext}`;
+
+    console.log(`Uploading ${fullFilename} to Shopify Files (${fileBuffer.length} bytes)...`);
+
+    // Step 1: Create staged upload
+    const stagedResult = await shopifyGraphQL(`
+      mutation stagedUploadsCreate($input: [StagedUploadInput!]!) {
+        stagedUploadsCreate(input: $input) {
+          stagedTargets {
+            url
+            resourceUrl
+            parameters { name value }
+          }
           userErrors { field message }
         }
       }
     `, {
-      metafields: [{
-        ownerId: SHOP_ID,
-        namespace: 'retreat',
-        key: 'civil_ids',
-        value: JSON.stringify(existing),
-        type: 'json'
+      input: [{
+        resource: 'FILE',
+        filename: fullFilename,
+        mimeType: mimeType,
+        fileSize: String(fileBuffer.length),
+        httpMethod: 'POST'
       }]
     });
-    return true;
+
+    const target = stagedResult?.stagedUploadsCreate?.stagedTargets?.[0];
+    if (!target) {
+      console.error('No staged target returned');
+      return null;
+    }
+
+    // Step 2: Upload to S3 using native https (avoids node-fetch FormData issues)
+    const uploadResult = await uploadBufferToS3(target.url, target.parameters, fileBuffer, fullFilename, mimeType);
+    
+    if (!uploadResult.ok) {
+      const errText = uploadResult.text ? await uploadResult.text() : 'Unknown error';
+      console.error('S3 upload failed:', uploadResult.status, errText);
+      return null;
+    }
+
+    // Step 3: Create file in Shopify
+    const fileResult = await shopifyGraphQL(`
+      mutation fileCreate($files: [FileCreateInput!]!) {
+        fileCreate(files: $files) {
+          files { id alt createdAt }
+          userErrors { field message }
+        }
+      }
+    `, {
+      files: [{
+        originalSource: target.resourceUrl,
+        alt: `Civil ID - ${filename}`,
+        contentType: 'IMAGE'
+      }]
+    });
+
+    const fileId = fileResult?.fileCreate?.files?.[0]?.id;
+    if (!fileId) {
+      console.error('File creation failed');
+      return null;
+    }
+
+    // Step 4: Poll for the file URL (Shopify processes async)
+    let fileUrl = null;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await new Promise(r => setTimeout(r, 2000)); // Wait 2 seconds
+      
+      const fileQuery = await shopifyGraphQL(`
+        query getFile($id: ID!) {
+          node(id: $id) {
+            ... on MediaImage {
+              image { url }
+              fileStatus
+            }
+          }
+        }
+      `, { id: fileId });
+
+      const status = fileQuery?.node?.fileStatus;
+      const url = fileQuery?.node?.image?.url;
+      
+      console.log(`File status check ${attempt + 1}: ${status}`);
+      
+      if (status === 'READY' && url) {
+        fileUrl = url;
+        break;
+      } else if (status === 'FAILED') {
+        console.error('File processing failed');
+        return null;
+      }
+    }
+
+    if (fileUrl) {
+      console.log(`✅ Image uploaded to Shopify Files: ${fileUrl}`);
+    } else {
+      console.log('⚠️ File uploaded but URL not ready yet, using resourceUrl as fallback');
+      fileUrl = target.resourceUrl;
+    }
+
+    return fileUrl;
   } catch (e) {
-    console.error('Failed to save civil ID image:', e.message);
-    return false;
+    console.error('Shopify Files upload error:', e.message);
+    return null;
   }
 }
 
@@ -277,13 +331,34 @@ app.post('/save-booking', async (req, res) => {
     booking.status = booking.status || 'confirmed';
     booking.createdAt = booking.createdAt || new Date().toISOString();
 
-    // Extract civil ID image to store separately if it's large
+    // Handle civil ID image - upload to Shopify Files for persistent storage
     let civilIdImage = booking.civilIdImageUrl || '';
-    if (civilIdImage && civilIdImage.startsWith('data:') && civilIdImage.length > 50000) {
-      // Store image separately and keep just a reference in the booking
-      booking.civilIdImageUrl = 'STORED_SEPARATELY';
-      // Save civil ID image in background (don't block booking save)
-      saveCivilIdImage(booking.id, civilIdImage).catch(e => console.error('Civil ID save error:', e));
+    if (civilIdImage && civilIdImage.startsWith('data:') && civilIdImage.length > 5000) {
+      // Upload to Shopify Files in background, save booking immediately
+      const uploadFilename = `civil-id-${booking.id}`;
+      
+      // Start upload but don't block booking save
+      uploadImageToShopifyFiles(civilIdImage, uploadFilename)
+        .then(async (shopifyUrl) => {
+          if (shopifyUrl) {
+            // Update the booking with the Shopify Files URL
+            try {
+              const { data: latestData } = await getBookingsData();
+              const idx = (latestData.bookings || []).findIndex(b => b.id === booking.id);
+              if (idx !== -1) {
+                latestData.bookings[idx].civilIdImageUrl = shopifyUrl;
+                await setBookingsData(latestData);
+                console.log(`✅ Updated booking ${booking.id} with Shopify Files URL`);
+              }
+            } catch (e) {
+              console.error('Failed to update booking with image URL:', e.message);
+            }
+          }
+        })
+        .catch(e => console.error('Civil ID upload error:', e.message));
+      
+      // Store a temporary placeholder while upload processes
+      booking.civilIdImageUrl = 'UPLOADING';
     }
 
     existingData.bookings.unshift(booking);
@@ -488,7 +563,7 @@ async function sendBookingEmail(booking, civilIdImage) {
   // Prepare attachments
   const attachments = [];
   
-  // Attach civil ID image if available
+  // Attach civil ID image if available (any size)
   if (civilIdImage && civilIdImage.startsWith('data:')) {
     const matches = civilIdImage.match(/^data:([^;]+);base64,(.+)$/);
     if (matches) {
