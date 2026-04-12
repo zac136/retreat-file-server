@@ -2,55 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const cors = require('cors');
 const fetch = require('node-fetch');
-const FormData = require('form-data');
 const { URLSearchParams } = require('url');
-const https = require('https');
-const http = require('http');
-const { URL } = require('url');
-
-// Helper: upload buffer to S3 using native https with getBuffer() for correct Content-Length
-function uploadBufferToS3(targetUrl, parameters, fileBuffer, filename, mimeType) {
-  return new Promise((resolve, reject) => {
-    const fd = new FormData();
-    parameters.forEach(p => fd.append(p.name, p.value));
-    fd.append('file', fileBuffer, { filename, contentType: mimeType, knownLength: fileBuffer.length });
-
-    // Use getBuffer() to get the complete body with correct Content-Length
-    fd.getBuffer((err, buffer) => {
-      if (err) return reject(err);
-
-      const parsedUrl = new URL(targetUrl);
-      const isHttps = parsedUrl.protocol === 'https:';
-      const lib = isHttps ? https : http;
-
-      const headers = fd.getHeaders();
-      headers['Content-Length'] = buffer.length;
-
-      const options = {
-        hostname: parsedUrl.hostname,
-        port: parsedUrl.port || (isHttps ? 443 : 80),
-        path: parsedUrl.pathname + parsedUrl.search,
-        method: 'POST',
-        headers
-      };
-
-      const req = lib.request(options, (res) => {
-        let body = '';
-        res.on('data', chunk => body += chunk);
-        res.on('end', () => {
-          if (res.statusCode >= 200 && res.statusCode < 300) {
-            resolve({ ok: true, status: res.statusCode });
-          } else {
-            resolve({ ok: false, status: res.statusCode, text: () => Promise.resolve(body) });
-          }
-        });
-      });
-      req.on('error', reject);
-      req.write(buffer);
-      req.end();
-    });
-  });
-}
 
 const app = express();
 const upload = multer({ 
@@ -167,125 +119,44 @@ async function setBookingsData(payload) {
   });
 }
 
-// ─── Helper: Upload image to Shopify Files (persistent storage) ─────────────
+// ─── Helper: get/set civil ID images in separate metafield ─────────────────
 
-async function uploadImageToShopifyFiles(imageDataUrl, filename) {
-  try {
-    // Extract mime type and base64 data
-    const matches = imageDataUrl.match(/^data:([^;]+);base64,(.+)$/);
-    if (!matches) {
-      console.error('Invalid data URL format');
-      return null;
-    }
-    const mimeType = matches[1];
-    const base64Data = matches[2];
-    const fileBuffer = Buffer.from(base64Data, 'base64');
-    const ext = mimeType.includes('png') ? 'png' : 'jpg';
-    const fullFilename = `${filename}.${ext}`;
-
-    console.log(`Uploading ${fullFilename} to Shopify Files (${fileBuffer.length} bytes)...`);
-
-    // Step 1: Create staged upload
-    const stagedResult = await shopifyGraphQL(`
-      mutation stagedUploadsCreate($input: [StagedUploadInput!]!) {
-        stagedUploadsCreate(input: $input) {
-          stagedTargets {
-            url
-            resourceUrl
-            parameters { name value }
-          }
-          userErrors { field message }
+async function getCivilIdImages() {
+  const data = await shopifyGraphQL(`
+    query {
+      shop {
+        metafield(namespace: "retreat", key: "civil_id_images") {
+          id
+          value
         }
       }
-    `, {
-      input: [{
-        resource: 'FILE',
-        filename: fullFilename,
-        mimeType: mimeType,
-        fileSize: String(fileBuffer.length),
-        httpMethod: 'POST'
-      }]
-    });
-
-    const target = stagedResult?.stagedUploadsCreate?.stagedTargets?.[0];
-    if (!target) {
-      console.error('No staged target returned');
-      return null;
     }
-
-    // Step 2: Upload to S3 using native https (avoids node-fetch FormData issues)
-    const uploadResult = await uploadBufferToS3(target.url, target.parameters, fileBuffer, fullFilename, mimeType);
-    
-    if (!uploadResult.ok) {
-      const errText = uploadResult.text ? await uploadResult.text() : 'Unknown error';
-      console.error('S3 upload failed:', uploadResult.status, errText);
-      return null;
-    }
-
-    // Step 3: Create file in Shopify
-    const fileResult = await shopifyGraphQL(`
-      mutation fileCreate($files: [FileCreateInput!]!) {
-        fileCreate(files: $files) {
-          files { id alt createdAt }
-          userErrors { field message }
-        }
-      }
-    `, {
-      files: [{
-        originalSource: target.resourceUrl,
-        alt: `Civil ID - ${filename}`,
-        contentType: 'IMAGE'
-      }]
-    });
-
-    const fileId = fileResult?.fileCreate?.files?.[0]?.id;
-    if (!fileId) {
-      console.error('File creation failed');
-      return null;
-    }
-
-    // Step 4: Poll for the file URL (Shopify processes async)
-    let fileUrl = null;
-    for (let attempt = 0; attempt < 10; attempt++) {
-      await new Promise(r => setTimeout(r, 2000)); // Wait 2 seconds
-      
-      const fileQuery = await shopifyGraphQL(`
-        query getFile($id: ID!) {
-          node(id: $id) {
-            ... on MediaImage {
-              image { url }
-              fileStatus
-            }
-          }
-        }
-      `, { id: fileId });
-
-      const status = fileQuery?.node?.fileStatus;
-      const url = fileQuery?.node?.image?.url;
-      
-      console.log(`File status check ${attempt + 1}: ${status}`);
-      
-      if (status === 'READY' && url) {
-        fileUrl = url;
-        break;
-      } else if (status === 'FAILED') {
-        console.error('File processing failed');
-        return null;
-      }
-    }
-
-    if (fileUrl) {
-      console.log(`✅ Image uploaded to Shopify Files: ${fileUrl}`);
-    } else {
-      console.log('⚠️ File uploaded but URL not ready yet, using resourceUrl as fallback');
-      fileUrl = target.resourceUrl;
-    }
-
-    return fileUrl;
-  } catch (e) {
-    console.error('Shopify Files upload error:', e.message);
-    return null;
+  `);
+  const metafield = data?.shop?.metafield;
+  let parsed = {};
+  if (metafield?.value) {
+    try { parsed = JSON.parse(metafield.value); } catch(e) {}
   }
+  return parsed;
+}
+
+async function setCivilIdImages(imagesMap) {
+  return shopifyGraphQL(`
+    mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
+      metafieldsSet(metafields: $metafields) {
+        metafields { id key value }
+        userErrors { field message }
+      }
+    }
+  `, {
+    metafields: [{
+      ownerId: SHOP_ID,
+      namespace: 'retreat',
+      key: 'civil_id_images',
+      value: JSON.stringify(imagesMap),
+      type: 'json'
+    }]
+  });
 }
 
 // ─── Health check ─────────────────────────────────────────────────────────────
@@ -331,34 +202,31 @@ app.post('/save-booking', async (req, res) => {
     booking.status = booking.status || 'confirmed';
     booking.createdAt = booking.createdAt || new Date().toISOString();
 
-    // Handle civil ID image - upload to Shopify Files for persistent storage
+    // Handle civil ID image - store in separate metafield to avoid size issues
     let civilIdImage = booking.civilIdImageUrl || '';
-    if (civilIdImage && civilIdImage.startsWith('data:') && civilIdImage.length > 5000) {
-      // Upload to Shopify Files in background, save booking immediately
-      const uploadFilename = `civil-id-${booking.id}`;
-      
-      // Start upload but don't block booking save
-      uploadImageToShopifyFiles(civilIdImage, uploadFilename)
-        .then(async (shopifyUrl) => {
-          if (shopifyUrl) {
-            // Update the booking with the Shopify Files URL
-            try {
-              const { data: latestData } = await getBookingsData();
-              const idx = (latestData.bookings || []).findIndex(b => b.id === booking.id);
-              if (idx !== -1) {
-                latestData.bookings[idx].civilIdImageUrl = shopifyUrl;
-                await setBookingsData(latestData);
-                console.log(`✅ Updated booking ${booking.id} with Shopify Files URL`);
-              }
-            } catch (e) {
-              console.error('Failed to update booking with image URL:', e.message);
-            }
-          }
-        })
-        .catch(e => console.error('Civil ID upload error:', e.message));
-      
-      // Store a temporary placeholder while upload processes
-      booking.civilIdImageUrl = 'UPLOADING';
+    if (civilIdImage && civilIdImage.startsWith('data:') && civilIdImage.length > 1000) {
+      // Save image to separate metafield
+      try {
+        const imagesMap = await getCivilIdImages();
+        imagesMap[booking.id] = civilIdImage;
+        
+        // Keep only last 20 images to avoid metafield size limit
+        const keys = Object.keys(imagesMap);
+        if (keys.length > 20) {
+          const toRemove = keys.slice(0, keys.length - 20);
+          toRemove.forEach(k => delete imagesMap[k]);
+        }
+        
+        await setCivilIdImages(imagesMap);
+        console.log(`✅ Civil ID image saved for booking ${booking.id} (${civilIdImage.length} chars)`);
+        
+        // Store a reference in the booking
+        booking.civilIdImageUrl = 'STORED_IN_IMAGES';
+      } catch (imgErr) {
+        console.error('Failed to save civil ID image separately:', imgErr.message);
+        // Fallback: keep the base64 in the booking itself
+        // (will work if total data is under 5MB)
+      }
     }
 
     existingData.bookings.unshift(booking);
@@ -391,9 +259,44 @@ app.post('/save-booking', async (req, res) => {
 app.get('/get-bookings', async (req, res) => {
   try {
     const { data } = await getBookingsData();
-    res.json({ success: true, bookings: data.bookings || [], bookedDates: data.bookedDates || [], blockedDates: data.blockedDates || [] });
+    
+    // Merge civil ID images from separate metafield
+    let imagesMap = {};
+    try {
+      imagesMap = await getCivilIdImages();
+    } catch (e) {
+      console.error('Failed to load civil ID images:', e.message);
+    }
+    
+    // Restore images into bookings
+    const bookings = (data.bookings || []).map(b => {
+      if (b.civilIdImageUrl === 'STORED_IN_IMAGES' && imagesMap[b.id]) {
+        return { ...b, civilIdImageUrl: imagesMap[b.id] };
+      }
+      return b;
+    });
+    
+    res.json({ success: true, bookings, bookedDates: data.bookedDates || [], blockedDates: data.blockedDates || [] });
   } catch (error) {
     console.error('Get bookings error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Get civil ID image for a specific booking ──────────────────────────────
+
+app.get('/get-civil-id/:bookingId', async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const imagesMap = await getCivilIdImages();
+    
+    if (imagesMap[bookingId]) {
+      res.json({ success: true, imageUrl: imagesMap[bookingId] });
+    } else {
+      res.status(404).json({ error: 'Image not found' });
+    }
+  } catch (error) {
+    console.error('Get civil ID error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -410,6 +313,24 @@ app.put('/update-booking/:id', async (req, res) => {
 
     const idx = existingData.bookings.findIndex(b => b.id === id);
     if (idx === -1) return res.status(404).json({ error: 'Booking not found' });
+
+    // Handle civil ID image update
+    let civilIdImage = updates.civilIdImageUrl || '';
+    if (civilIdImage && civilIdImage.startsWith('data:') && civilIdImage.length > 1000) {
+      try {
+        const imagesMap = await getCivilIdImages();
+        imagesMap[id] = civilIdImage;
+        const keys = Object.keys(imagesMap);
+        if (keys.length > 20) {
+          const toRemove = keys.slice(0, keys.length - 20);
+          toRemove.forEach(k => delete imagesMap[k]);
+        }
+        await setCivilIdImages(imagesMap);
+        updates.civilIdImageUrl = 'STORED_IN_IMAGES';
+      } catch (imgErr) {
+        console.error('Failed to save civil ID image:', imgErr.message);
+      }
+    }
 
     existingData.bookings[idx] = { ...existingData.bookings[idx], ...updates, id };
 
@@ -475,6 +396,15 @@ app.delete('/delete-booking/:id', async (req, res) => {
     if (existingData.bookings.length === before) {
       return res.status(404).json({ error: 'Booking not found' });
     }
+
+    // Also remove civil ID image
+    try {
+      const imagesMap = await getCivilIdImages();
+      if (imagesMap[id]) {
+        delete imagesMap[id];
+        await setCivilIdImages(imagesMap);
+      }
+    } catch (e) {}
 
     const result = await setBookingsData(existingData);
     if (result?.metafieldsSet?.userErrors?.length > 0) {
