@@ -834,20 +834,20 @@ body { font-family: 'Tajawal', Arial, sans-serif; background: #f6f3ee; color: #2
 .container { max-width: 600px; margin: 0 auto; padding: 20px 16px; }
 .logo-section { text-align: center; padding: 24px 0 16px; }
 .logo-section img { width: 140px; margin-bottom: 8px; }
-.logo-section h1 { font-size: 20px; color: #1a3a4a; font-weight: 700; }
+.logo-section h1 { font-size: 20px; color: #000000; font-weight: 700; }
 .logo-section p { color: #9a8f82; font-size: 13px; }
 .card { background: #fff; border-radius: 12px; padding: 20px; margin-bottom: 16px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); border: 1px solid #e8e2d8; }
-.card h2 { font-size: 16px; color: #1a3a4a; margin-bottom: 12px; border-bottom: 2px solid #c9a961; padding-bottom: 8px; }
+.card h2 { font-size: 16px; color: #000000; margin-bottom: 12px; border-bottom: 2px solid #c9a961; padding-bottom: 8px; }
 .info-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f0ebe4; font-size: 14px; }
 .info-row:last-child { border-bottom: none; }
 .info-row .label { color: #7a7060; }
-.info-row .value { color: #1a3a4a; font-weight: 600; }
+.info-row .value { color: #000000; font-weight: 600; }
 .terms-card { background: #fff; border-radius: 12px; padding: 20px; margin-bottom: 16px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); border: 1px solid #e8e2d8; }
-.terms-card h2 { font-size: 16px; color: #1a3a4a; margin-bottom: 12px; border-bottom: 2px solid #c9a961; padding-bottom: 8px; }
+.terms-card h2 { font-size: 16px; color: #000000; margin-bottom: 12px; border-bottom: 2px solid #c9a961; padding-bottom: 8px; }
 .terms-card ol { padding-right: 20px; font-size: 12px; line-height: 1.6; color: #4a4540; }
 .terms-card li { margin-bottom: 4px; }
 .sig-card { background: #fff; border-radius: 12px; padding: 20px; margin-bottom: 16px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); border: 1px solid #e8e2d8; text-align: center; }
-.sig-card h2 { font-size: 16px; color: #1a3a4a; margin-bottom: 4px; }
+.sig-card h2 { font-size: 16px; color: #000000; margin-bottom: 4px; }
 .sig-card p { color: #9a8f82; font-size: 13px; margin-bottom: 12px; }
 canvas { border: 2px dashed #c9a961; border-radius: 8px; background: #fefcf9; touch-action: none; width: 100%; max-width: 500px; }
 .btn-row { display: flex; gap: 10px; margin-top: 12px; justify-content: center; }
@@ -857,7 +857,7 @@ canvas { border: 2px dashed #c9a961; border-radius: 8px; background: #fefcf9; to
 .btn-secondary { background: #e8e2d8; color: #5a5045; }
 .success-msg { text-align: center; padding: 40px 20px; }
 .success-msg .icon { font-size: 60px; margin-bottom: 16px; }
-.success-msg h2 { color: #1a3a4a; margin-bottom: 8px; }
+.success-msg h2 { color: #000000; margin-bottom: 8px; }
 .success-msg p { color: #7a7060; font-size: 14px; }
 .already-signed { text-align: center; padding: 40px 20px; }
 .already-signed .icon { font-size: 50px; margin-bottom: 12px; }
@@ -958,7 +958,7 @@ function initCanvas() {
   canvas.height = 360;
   canvas.style.height = '180px';
   ctx.scale(2, 2);
-  ctx.strokeStyle = '#1a3a4a';
+  ctx.strokeStyle = '#000000';
   ctx.lineWidth = 2.5;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
@@ -1021,7 +1021,7 @@ async function submitSignature() {
     const result = await resp.json();
     
     if (result.success) {
-      document.getElementById('content').innerHTML = '<div class="success-msg"><div class="icon">✅</div><h2>تم التوقيع بنجاح!</h2><p>شكراً لك، تم حفظ توقيعك على عقد الإيجار.</p><p style="margin-top:12px;color:#c9a961;font-weight:600;">شاليه ريتريت - نتمنى لك إقامة ممتعة 🏖️</p></div>';
+      document.getElementById('content').innerHTML = '<div class="success-msg"><div class="icon">✅</div><h2>تم التوقيع بنجاح!</h2><p>شكراً لك، تم حفظ توقيعك على عقد الإيجار.</p><p style="margin-top:12px;color:#000000;font-weight:600;">شاليه ريتريت - نتمنى لك إقامة ممتعة 🏖️</p></div>';
     } else {
       btn.disabled = false;
       btn.textContent = '✅ تأكيد التوقيع';
@@ -1078,19 +1078,19 @@ async function generateContractPDF(booking, signatureDataURL) {
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap');
   * { margin:0; padding:0; box-sizing:border-box; }
-  body { font-family:'Tajawal',sans-serif; background:#fff; color:#1a3a4a; padding:30px 40px; direction:rtl; }
+  body { font-family:'Tajawal',sans-serif; background:#fff; color:#000000; padding:30px 40px; direction:rtl; }
   .header { text-align:center; margin-bottom:10px; }
-  .header h1 { font-size:28px; color:#1a3a4a; letter-spacing:4px; margin-bottom:2px; font-weight:800; }
+  .header h1 { font-size:28px; color:#000000; letter-spacing:4px; margin-bottom:2px; font-weight:800; }
   .header .sub { font-size:12px; color:#7a7060; margin-bottom:2px; }
   .header .loc { font-size:10px; color:#aaa; }
   .gold-line { height:2px; background:linear-gradient(90deg,transparent,#c9a961,transparent); margin:12px 0; }
   .title { text-align:center; font-size:18px; font-weight:700; color:#c9a961; margin-bottom:16px; }
-  .section-title { font-size:13px; font-weight:700; color:#1a3a4a; margin-bottom:8px; padding-bottom:4px; border-bottom:1px solid #e8dcc8; }
+  .section-title { font-size:13px; font-weight:700; color:#000000; margin-bottom:8px; padding-bottom:4px; border-bottom:1px solid #e8dcc8; }
   .details-table { width:100%; border-collapse:collapse; margin-bottom:14px; }
   .details-table tr:nth-child(even) { background:#fdf8f0; }
   .details-table td { padding:6px 10px; font-size:11px; border-bottom:1px solid #f0ebe0; }
   .details-table td:first-child { font-weight:700; color:#7a7060; width:35%; }
-  .details-table td:last-child { color:#1a3a4a; }
+  .details-table td:last-child { color:#000000; }
   .terms-box { background:#fdf8f0; border:1px solid #e8dcc8; border-radius:8px; padding:12px 14px; margin-bottom:12px; }
   .ack-box { background:#f5efe5; border:1px solid #c9a961; border-radius:6px; padding:10px 14px; text-align:center; font-size:11px; font-weight:700; color:#5a5045; margin-bottom:14px; }
   .sig-section { margin-bottom:10px; }
@@ -1172,15 +1172,15 @@ async function sendSignedContractEmail(booking, signatureDataURL) {
     const htmlBody = `
       <div dir="rtl" style="font-family:Tajawal,Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
         <div style="text-align:center;margin-bottom:20px;">
-          <h2 style="color:#1a3a4a;margin-bottom:4px;">عقد موقّع - شاليه ريتريت</h2>
+          <h2 style="color:#000000;margin-bottom:4px;">عقد موقّع - شاليه ريتريت</h2>
           <p style="color:#c9a961;font-size:14px;">تم توقيع العقد من قبل العميل</p>
         </div>
         <div style="background:#fdf8f0;border:1px solid #e8dcc8;padding:16px;border-radius:8px;margin-bottom:16px;">
           <table style="width:100%;border-collapse:collapse;font-size:14px;">
-            <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">اسم المستأجر:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;border-bottom:1px solid #ede8e1;">${booking.name || '-'}</td></tr>
-            <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">رقم الهاتف:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;border-bottom:1px solid #ede8e1;">${booking.phone || '-'}</td></tr>
-            <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">تاريخ الدخول:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;border-bottom:1px solid #ede8e1;">${booking.checkIn || '-'}</td></tr>
-            <tr><td style="padding:8px;color:#9a8f82;">تاريخ الخروج:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;">${booking.checkOut || '-'}</td></tr>
+            <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">اسم المستأجر:</td><td style="padding:8px;font-weight:600;color:#000000;border-bottom:1px solid #ede8e1;">${booking.name || '-'}</td></tr>
+            <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">رقم الهاتف:</td><td style="padding:8px;font-weight:600;color:#000000;border-bottom:1px solid #ede8e1;">${booking.phone || '-'}</td></tr>
+            <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">تاريخ الدخول:</td><td style="padding:8px;font-weight:600;color:#000000;border-bottom:1px solid #ede8e1;">${booking.checkIn || '-'}</td></tr>
+            <tr><td style="padding:8px;color:#9a8f82;">تاريخ الخروج:</td><td style="padding:8px;font-weight:600;color:#000000;">${booking.checkOut || '-'}</td></tr>
           </table>
         </div>
         <p style="text-align:center;color:#2e7d32;font-weight:600;">✅ العقد الموقّع مرفق كملف PDF</p>
@@ -1264,20 +1264,20 @@ async function sendBookingEmail(booking, civilIdImage) {
   const htmlBody = `
     <div dir="rtl" style="font-family:Tajawal,Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
       <div style="text-align:center;margin-bottom:20px;">
-        <h2 style="color:#1a3a4a;margin-bottom:4px;">حجز جديد - شاليه ريتريت</h2>
+        <h2 style="color:#000000;margin-bottom:4px;">حجز جديد - شاليه ريتريت</h2>
         <p style="color:#c9a961;font-size:14px;">تم استلام حجز جديد عبر الموقع</p>
       </div>
       <div style="background:#fdf8f0;border:1px solid #e8dcc8;padding:16px;border-radius:8px;margin-bottom:16px;">
         <table style="width:100%;border-collapse:collapse;font-size:14px;">
-          <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">اسم المستأجر:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;border-bottom:1px solid #ede8e1;">${b.name || '—'}</td></tr>
-          <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">رقم الهاتف:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;border-bottom:1px solid #ede8e1;">${b.phone || '—'}</td></tr>
-          <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">البريد الإلكتروني:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;border-bottom:1px solid #ede8e1;">${b.email || '—'}</td></tr>
-          <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">الرقم المدني:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;border-bottom:1px solid #ede8e1;">${b.civilId || '—'}</td></tr>
-          <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">تاريخ الدخول:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;border-bottom:1px solid #ede8e1;">${b.checkIn || '—'}</td></tr>
-          <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">تاريخ الخروج:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;border-bottom:1px solid #ede8e1;">${b.checkOut || '—'}</td></tr>
-          <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">الباقة:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;border-bottom:1px solid #ede8e1;">${b.packageName || '—'}</td></tr>
+          <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">اسم المستأجر:</td><td style="padding:8px;font-weight:600;color:#000000;border-bottom:1px solid #ede8e1;">${b.name || '—'}</td></tr>
+          <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">رقم الهاتف:</td><td style="padding:8px;font-weight:600;color:#000000;border-bottom:1px solid #ede8e1;">${b.phone || '—'}</td></tr>
+          <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">البريد الإلكتروني:</td><td style="padding:8px;font-weight:600;color:#000000;border-bottom:1px solid #ede8e1;">${b.email || '—'}</td></tr>
+          <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">الرقم المدني:</td><td style="padding:8px;font-weight:600;color:#000000;border-bottom:1px solid #ede8e1;">${b.civilId || '—'}</td></tr>
+          <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">تاريخ الدخول:</td><td style="padding:8px;font-weight:600;color:#000000;border-bottom:1px solid #ede8e1;">${b.checkIn || '—'}</td></tr>
+          <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">تاريخ الخروج:</td><td style="padding:8px;font-weight:600;color:#000000;border-bottom:1px solid #ede8e1;">${b.checkOut || '—'}</td></tr>
+          <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">الباقة:</td><td style="padding:8px;font-weight:600;color:#000000;border-bottom:1px solid #ede8e1;">${b.packageName || '—'}</td></tr>
           <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">مبلغ الإيجار:</td><td style="padding:8px;font-weight:600;color:#c9a961;border-bottom:1px solid #ede8e1;">${b.price || '—'} د.ك</td></tr>
-          <tr><td style="padding:8px;color:#9a8f82;">عدد الأشخاص:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;">${b.guests || '—'}</td></tr>
+          <tr><td style="padding:8px;color:#9a8f82;">عدد الأشخاص:</td><td style="padding:8px;font-weight:600;color:#000000;">${b.guests || '—'}</td></tr>
         </table>
       </div>
       ${b.notes ? '<div style="background:#fff8ee;border:1px solid #c9a961;padding:12px;border-radius:8px;margin-bottom:16px;"><strong>ملاحظات:</strong> ' + b.notes + '</div>' : ''}
