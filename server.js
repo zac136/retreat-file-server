@@ -840,15 +840,15 @@ function createEmailTransporter() {
   console.log('Creating email transporter, EMAIL_USER:', process.env.EMAIL_USER || 'NOT SET', ', EMAIL_PASS length:', pass.length);
   return nodemailer.createTransport({
     host: 'smtp.gmail.com',
-    port: 587,
-    secure: false,
+    port: 465,
+    secure: true,
     auth: {
       user: process.env.EMAIL_USER || 'retreat.kuwait@gmail.com',
       pass: pass
     },
-    connectionTimeout: 10000,
-    greetingTimeout: 10000,
-    socketTimeout: 15000
+    connectionTimeout: 15000,
+    greetingTimeout: 15000,
+    socketTimeout: 20000
   });
 }
 
