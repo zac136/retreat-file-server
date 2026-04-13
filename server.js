@@ -835,13 +835,24 @@ loadBooking();
 const nodemailer = require('nodemailer');
 
 // Gmail SMTP transporter - uses App Password
-const emailTransporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER || 'retreat.kuwait@gmail.com',
-    pass: process.env.EMAIL_PASS || ''
-  }
-});
+function createEmailTransporter() {
+  const pass = process.env.EMAIL_PASS || '';
+  console.log('Creating email transporter, EMAIL_USER:', process.env.EMAIL_USER || 'NOT SET', ', EMAIL_PASS length:', pass.length);
+  return nodemailer.createTransport({
+    host: 'smtp.gmail.com',
+    port: 587,
+    secure: false,
+    auth: {
+      user: process.env.EMAIL_USER || 'retreat.kuwait@gmail.com',
+      pass: pass
+    },
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 15000
+  });
+}
+
+let emailTransporter = createEmailTransporter();
 
 // Shared email sending function
 async function sendBookingEmail(booking, civilIdImage) {
@@ -910,9 +921,19 @@ async function sendBookingEmail(booking, civilIdImage) {
     attachments: attachments.length > 0 ? attachments : undefined
   };
 
-  const info = await emailTransporter.sendMail(mailOptions);
-  console.log('Email sent:', info.messageId);
-  return info;
+  // Try sending with timeout and retry
+  try {
+    const info = await emailTransporter.sendMail(mailOptions);
+    console.log('Email sent:', info.messageId);
+    return info;
+  } catch (firstErr) {
+    console.error('First email attempt failed:', firstErr.message);
+    // Recreate transporter and retry once
+    emailTransporter = createEmailTransporter();
+    const info = await emailTransporter.sendMail(mailOptions);
+    console.log('Email sent on retry:', info.messageId);
+    return info;
+  }
 }
 
 // Manual email endpoint (kept for backward compatibility)
