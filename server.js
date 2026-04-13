@@ -4,6 +4,7 @@ const cors = require('cors');
 const fetch = require('node-fetch');
 const { URLSearchParams } = require('url');
 const crypto = require('crypto');
+const PDFDocument = require('pdfkit');
 
 const app = express();
 const upload = multer({ 
@@ -456,6 +457,12 @@ app.post('/sign/:token', async (req, res) => {
 
     console.log(`✅ Signature saved for booking ${bookingId} via token`);
     res.json({ success: true, message: 'تم حفظ التوقيع بنجاح' });
+
+    // Send signed contract PDF to admin email (async, don't block response)
+    const bookingForPDF = { ...existingData.bookings[idx], signedAt: new Date().toISOString() };
+    sendSignedContractEmail(bookingForPDF, signatureDataURL).catch(err => {
+      console.error('Failed to send contract PDF after signing:', err.message);
+    });
   } catch (error) {
     console.error('Submit signature error:', error);
     res.status(500).json({ error: error.message });
@@ -830,9 +837,211 @@ loadBooking();
 </html>`);
 });
 
+// ─── PDF Contract Generation ──────────────────────────────────────────────────
+
+const CONTRACT_TERMS = [
+  'تعتمد بيانات الحجز المدخلة من المستأجر، وأي بيانات غير صحيحة أو مضللة تخول للمؤجر إلغاء الحجز أو رفض الدخول دون تعويض. التأجير للعوائل فقط.',
+  'وقت الدخول بعد الساعة 2:00 مساءً، ووقت الخروج بحد أقصى الساعة 2:00 مساءً، ويترتب على التأخر عن الخروج مبلغ 25 د.ك عن كل ساعة ويخصم من التأمين.',
+  'يلتزم المستأجر بدفع كامل مبلغ الإيجار إضافة إلى مبلغ تأمين قدره 100 د.ك، ويعاد التأمين خلال 48 ساعة بعد المعاينة، مع أحقية المؤجر بخصم أي أضرار أو تنظيف إضافي.',
+  'الحد الأقصى المسموح به داخل الشاليه هو 8 أشخاص وعاملتين فقط، ويمنع إدخال أي أشخاص غير مذكورين في بيانات الحجز.',
+  'يلتزم المستأجر بالمحافظة على نظافة الشاليه ومرافقه ومحتوياته، ويحق للمؤجر خصم رسوم تنظيف عند تركه بحالة غير مناسبة.',
+  'المستأجر مسؤول مسؤولية كاملة عن أي أضرار أو تلفيات أو فقدان خلال مدة الإيجار، وفي حال تجاوز قيمة الأضرار مبلغ التأمين يلتزم المستأجر بسداد الفرق.',
+  'يلتزم المستأجر بالمحافظة على الهدوء وعدم إزعاج الجيران، ويمنع استخدام مكبرات الصوت أو أي تصرف يسبب شكاوى.',
+  'يكون استخدام المسبح على مسؤولية المستأجر بالكامل، مع ضرورة مراقبة الأطفال، ويخلي المستأجر مسؤولية المؤجر عن أي حوادث ناتجة عن سوء الاستخدام أو الإهمال.',
+  'يمنع منعاً باتاً التدخين داخل الشاليه، وإدخال الحيوانات، وإقامة الحفلات أو التجمعات، والعبث بالممتلكات أو ممارسة أي نشاط مخالف للقانون أو الآداب العامة.',
+  'في حال حدوث أي عطل يلتزم المستأجر بإبلاغ المؤجر فوراً، ولا يجوز له إجراء أي إصلاح أو تعديل دون موافقة مسبقة من المؤجر.',
+  'سياسة الإلغاء: أكثر من أسبوعين استرجاع كامل المبلغ، وقبل أسبوعين خصم 30%، وقبل أسبوع خصم 50%، وأقل من أسبوع أو عدم الحضور لا يوجد استرجاع.',
+  'يحق للمؤجر رفض الدخول أو إنهاء الحجز فوراً عند مخالفة الشروط أو تجاوز العدد المسموح أو الإزعاج أو عدم دفع كامل المبلغ، كما يمنع تأجير الشاليه من الباطن أو التنازل عنه للغير.'
+];
+
+async function generateContractPDF(booking, signatureDataURL) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ 
+        size: 'A4', 
+        margin: 40,
+        info: {
+          Title: 'عقد إيجار - شاليه ريتريت',
+          Author: 'Retreat Beach House'
+        }
+      });
+      
+      const chunks = [];
+      doc.on('data', chunk => chunks.push(chunk));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+
+      // Register Arabic font - use built-in Helvetica as fallback
+      // PDFKit doesn't natively support Arabic, so we'll use HTML-to-PDF approach
+      // Instead, generate a clean structured PDF with embedded data
+      
+      const b = booking;
+      const pageWidth = 515; // A4 width minus margins
+      
+      // ─── Header ───
+      doc.fontSize(22).font('Helvetica-Bold')
+         .text('RETREAT', { align: 'center' });
+      doc.fontSize(10).font('Helvetica')
+         .text('Private Beach House', { align: 'center' });
+      doc.moveDown(0.3);
+      doc.fontSize(9).fillColor('#888888')
+         .text('Al Khiran, Phase 5 - Kuwait', { align: 'center' });
+      doc.moveDown(0.5);
+      
+      // Gold line
+      doc.strokeColor('#c9a961').lineWidth(2)
+         .moveTo(40, doc.y).lineTo(555, doc.y).stroke();
+      doc.moveDown(0.5);
+      
+      doc.fontSize(14).fillColor('#1a3a4a').font('Helvetica-Bold')
+         .text('Rental Agreement / Contract', { align: 'center' });
+      doc.moveDown(0.8);
+      
+      // ─── Booking Details Table ───
+      doc.fontSize(11).font('Helvetica-Bold').fillColor('#1a3a4a')
+         .text('Booking Details:');
+      doc.moveDown(0.3);
+      
+      const details = [
+        ['Tenant / Name', b.name || '-'],
+        ['Phone', b.phone || '-'],
+        ['Email', b.email || '-'],
+        ['Civil ID', b.civilId || '-'],
+        ['Check-in', b.checkIn || '-'],
+        ['Check-out', b.checkOut || '-'],
+        ['Package', b.packageName || b.package || '-'],
+        ['Rental Amount', (b.price || '-') + ' KD'],
+        ['Security Deposit', (b.securityDeposit || '100') + ' KD'],
+        ['Guests', b.guests || '-']
+      ];
+      
+      const colX = 42;
+      const valX = 200;
+      let rowY = doc.y;
+      
+      details.forEach((row, i) => {
+        const bgColor = i % 2 === 0 ? '#f8f6f2' : '#ffffff';
+        doc.rect(colX - 2, rowY - 2, pageWidth, 18).fill(bgColor);
+        doc.fontSize(9).font('Helvetica-Bold').fillColor('#7a7060')
+           .text(row[0] + ':', colX, rowY, { width: 150 });
+        doc.fontSize(9).font('Helvetica').fillColor('#1a3a4a')
+           .text(row[1], valX, rowY, { width: 300 });
+        rowY += 18;
+      });
+      
+      doc.y = rowY + 10;
+      
+      // ─── Terms & Conditions ───
+      doc.fontSize(11).font('Helvetica-Bold').fillColor('#1a3a4a')
+         .text('Terms & Conditions:');
+      doc.moveDown(0.3);
+      
+      CONTRACT_TERMS.forEach((term, i) => {
+        doc.fontSize(7).font('Helvetica').fillColor('#4a4540')
+           .text((i + 1) + '. ' + term, colX, doc.y, { 
+             width: pageWidth - 4, 
+             lineGap: 1 
+           });
+        doc.moveDown(0.15);
+      });
+      
+      doc.moveDown(0.5);
+      
+      // ─── Acknowledgment ───
+      doc.rect(colX - 2, doc.y - 4, pageWidth, 22).fill('#fdf8f0').stroke('#c9a961');
+      doc.fontSize(8).font('Helvetica-Bold').fillColor('#5a5045')
+         .text('The tenant acknowledges reading, understanding, and agreeing to all terms and conditions stated above.', colX + 4, doc.y, { width: pageWidth - 10 });
+      doc.moveDown(1);
+      
+      // ─── Signature Section ───
+      doc.fontSize(11).font('Helvetica-Bold').fillColor('#1a3a4a')
+         .text('Digital Signature:');
+      doc.moveDown(0.3);
+      
+      if (signatureDataURL && signatureDataURL.startsWith('data:')) {
+        try {
+          const sigBase64 = signatureDataURL.replace(/^data:image\/\w+;base64,/, '');
+          const sigBuffer = Buffer.from(sigBase64, 'base64');
+          doc.image(sigBuffer, colX, doc.y, { width: 200, height: 80 });
+          doc.moveDown(0.3);
+        } catch (sigErr) {
+          console.error('Failed to embed signature in PDF:', sigErr.message);
+          doc.fontSize(9).fillColor('#c0392b').text('[Signature image could not be embedded]');
+        }
+      } else {
+        doc.fontSize(9).fillColor('#888888').text('[No signature available]');
+      }
+      
+      doc.moveDown(0.5);
+      
+      // Signed date
+      const signedDate = b.signedAt ? new Date(b.signedAt).toLocaleString('en-GB', { dateStyle: 'long', timeStyle: 'short' }) : new Date().toLocaleString('en-GB', { dateStyle: 'long', timeStyle: 'short' });
+      doc.fontSize(8).font('Helvetica').fillColor('#888888')
+         .text('Signed on: ' + signedDate, { align: 'left' });
+      
+      // ─── Footer ───
+      doc.moveDown(1);
+      doc.strokeColor('#c9a961').lineWidth(1)
+         .moveTo(40, doc.y).lineTo(555, doc.y).stroke();
+      doc.moveDown(0.3);
+      doc.fontSize(7).fillColor('#888888')
+         .text('Retreat Beach House - Al Khiran, Phase 5, Kuwait | retreatbh.com', { align: 'center' });
+      
+      doc.end();
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+// ─── Send signed contract PDF via email ─────────────────────────────────────
+
+async function sendSignedContractEmail(booking, signatureDataURL) {
+  try {
+    const pdfBuffer = await generateContractPDF(booking, signatureDataURL);
+    const adminEmail = 'retreat.kuwait@gmail.com';
+    
+    const htmlBody = `
+      <div dir="rtl" style="font-family:Tajawal,Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
+        <div style="text-align:center;margin-bottom:20px;">
+          <h2 style="color:#1a3a4a;margin-bottom:4px;">عقد موقّع - شاليه ريتريت</h2>
+          <p style="color:#c9a961;font-size:14px;">تم توقيع العقد من قبل العميل</p>
+        </div>
+        <div style="background:#fdf8f0;border:1px solid #e8dcc8;padding:16px;border-radius:8px;margin-bottom:16px;">
+          <table style="width:100%;border-collapse:collapse;font-size:14px;">
+            <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">اسم المستأجر:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;border-bottom:1px solid #ede8e1;">${booking.name || '-'}</td></tr>
+            <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">رقم الهاتف:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;border-bottom:1px solid #ede8e1;">${booking.phone || '-'}</td></tr>
+            <tr><td style="padding:8px;color:#9a8f82;border-bottom:1px solid #ede8e1;">تاريخ الدخول:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;border-bottom:1px solid #ede8e1;">${booking.checkIn || '-'}</td></tr>
+            <tr><td style="padding:8px;color:#9a8f82;">تاريخ الخروج:</td><td style="padding:8px;font-weight:600;color:#1a3a4a;">${booking.checkOut || '-'}</td></tr>
+          </table>
+        </div>
+        <p style="text-align:center;color:#2e7d32;font-weight:600;">✅ العقد الموقّع مرفق كملف PDF</p>
+      </div>
+    `;
+    
+    await sendEmailHTTP({
+      from: 'Retreat Beach House <onboarding@resend.dev>',
+      to: adminEmail,
+      subject: '✍️ عقد موقّع - ' + (booking.name || 'عميل') + ' | ' + (booking.checkIn || ''),
+      html: htmlBody,
+      attachments: [{
+        filename: 'contract-' + (booking.name || 'customer').replace(/\s+/g, '-') + '.pdf',
+        content: pdfBuffer,
+        contentType: 'application/pdf'
+      }]
+    });
+    
+    console.log('✅ Signed contract PDF sent to admin for booking', booking.id);
+  } catch (err) {
+    console.error('Failed to send signed contract PDF:', err.message);
+  }
+}
+
 // ─── Email notification ─────────────────────────────────────────────────────
 
 // Email sending via Resend HTTP API (Render blocks SMTP ports on free tier)
+// Resend free tier: 100 emails/day, 3000/month - perfect for booking notifications
+// If RESEND_API_KEY is not set, falls back to storing notification in metafield
 // Resend free tier: 100 emails/day, 3000/month - perfect for booking notifications
 // If RESEND_API_KEY is not set, falls back to storing notification in metafield
 
@@ -936,6 +1145,29 @@ async function sendBookingEmail(booking, civilIdImage) {
         contentType: sigMatches[1]
       });
     }
+  }
+
+  // Generate and attach signed contract PDF if signature exists
+  try {
+    let sigDataForPDF = null;
+    if (b.signatureDataURL === 'STORED_IN_SIGNATURES') {
+      // Retrieve actual signature from separate storage
+      const sigMap = await getSignatures();
+      sigDataForPDF = sigMap[b.id] || null;
+    } else if (b.signatureDataURL && b.signatureDataURL.startsWith('data:')) {
+      sigDataForPDF = b.signatureDataURL;
+    }
+    if (sigDataForPDF) {
+      const pdfBuffer = await generateContractPDF(b, sigDataForPDF);
+      attachments.push({
+        filename: `contract-${b.name || 'customer'}.pdf`,
+        content: pdfBuffer,
+        contentType: 'application/pdf'
+      });
+      console.log('\u2705 Contract PDF attached to booking email');
+    }
+  } catch (pdfErr) {
+    console.error('Failed to generate contract PDF for booking email:', pdfErr.message);
   }
 
   const result = await sendEmailHTTP({
