@@ -21,14 +21,43 @@ app.use(cors({
 app.use(express.json({ limit: '50mb' }));
 
 const SHOPIFY_STORE = process.env.SHOPIFY_SHOP || 'retreat-beach-house';
-const SHOPIFY_TOKEN = process.env.SHOPIFY_TOKEN;
+const CLIENT_ID = process.env.SHOPIFY_CLIENT_ID;
+const CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET;
 const SHOP_ID = 'gid://shopify/Shop/73972482215';
 
-// ─── Token Management (direct Admin API token) ───────────────────────────────
+// ─── OAuth Token Management ───────────────────────────────────────────────────
 
-function getToken() {
-  if (!SHOPIFY_TOKEN) throw new Error('SHOPIFY_TOKEN env var not set');
-  return Promise.resolve(SHOPIFY_TOKEN);
+let _token = null;
+let _tokenExpiresAt = 0;
+
+async function getToken() {
+  if (_token && Date.now() < _tokenExpiresAt - 60_000) return _token;
+
+  const response = await fetch(
+    `https://${SHOPIFY_STORE}.myshopify.com/admin/oauth/access_token`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'client_credentials',
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET,
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Token request failed: ${response.status} - ${text.substring(0, 200)}`);
+  }
+
+  const data = await response.json();
+  if (!data.access_token) throw new Error('No access_token in response');
+
+  _token = data.access_token;
+  _tokenExpiresAt = Date.now() + (data.expires_in || 86399) * 1000;
+  console.log('Got new Shopify token, expires in', data.expires_in, 'seconds');
+  return _token;
 }
 
 async function shopifyGraphQL(query, variables = {}) {
