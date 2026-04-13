@@ -4,7 +4,7 @@ const cors = require('cors');
 const fetch = require('node-fetch');
 const { URLSearchParams } = require('url');
 const crypto = require('crypto');
-const PDFDocument = require('pdfkit');
+const puppeteer = require('puppeteer');
 
 const app = express();
 const upload = multer({ 
@@ -855,143 +855,108 @@ const CONTRACT_TERMS = [
 ];
 
 async function generateContractPDF(booking, signatureDataURL) {
-  return new Promise((resolve, reject) => {
-    try {
-      const doc = new PDFDocument({ 
-        size: 'A4', 
-        margin: 40,
-        info: {
-          Title: 'عقد إيجار - شاليه ريتريت',
-          Author: 'Retreat Beach House'
-        }
-      });
-      
-      const chunks = [];
-      doc.on('data', chunk => chunks.push(chunk));
-      doc.on('end', () => resolve(Buffer.concat(chunks)));
-      doc.on('error', reject);
+  const b = booking;
+  const signedDate = b.signedAt 
+    ? new Date(b.signedAt).toLocaleString('ar-KW', { dateStyle: 'long', timeStyle: 'short' })
+    : new Date().toLocaleString('ar-KW', { dateStyle: 'long', timeStyle: 'short' });
 
-      // Register Arabic font - use built-in Helvetica as fallback
-      // PDFKit doesn't natively support Arabic, so we'll use HTML-to-PDF approach
-      // Instead, generate a clean structured PDF with embedded data
-      
-      const b = booking;
-      const pageWidth = 515; // A4 width minus margins
-      
-      // ─── Header ───
-      doc.fontSize(22).font('Helvetica-Bold')
-         .text('RETREAT', { align: 'center' });
-      doc.fontSize(10).font('Helvetica')
-         .text('Private Beach House', { align: 'center' });
-      doc.moveDown(0.3);
-      doc.fontSize(9).fillColor('#888888')
-         .text('Al Khiran, Phase 5 - Kuwait', { align: 'center' });
-      doc.moveDown(0.5);
-      
-      // Gold line
-      doc.strokeColor('#c9a961').lineWidth(2)
-         .moveTo(40, doc.y).lineTo(555, doc.y).stroke();
-      doc.moveDown(0.5);
-      
-      doc.fontSize(14).fillColor('#1a3a4a').font('Helvetica-Bold')
-         .text('Rental Agreement / Contract', { align: 'center' });
-      doc.moveDown(0.8);
-      
-      // ─── Booking Details Table ───
-      doc.fontSize(11).font('Helvetica-Bold').fillColor('#1a3a4a')
-         .text('Booking Details:');
-      doc.moveDown(0.3);
-      
-      const details = [
-        ['Tenant / Name', b.name || '-'],
-        ['Phone', b.phone || '-'],
-        ['Email', b.email || '-'],
-        ['Civil ID', b.civilId || '-'],
-        ['Check-in', b.checkIn || '-'],
-        ['Check-out', b.checkOut || '-'],
-        ['Package', b.packageName || b.package || '-'],
-        ['Rental Amount', (b.price || '-') + ' KD'],
-        ['Security Deposit', (b.securityDeposit || '100') + ' KD'],
-        ['Guests', b.guests || '-']
-      ];
-      
-      const colX = 42;
-      const valX = 200;
-      let rowY = doc.y;
-      
-      details.forEach((row, i) => {
-        const bgColor = i % 2 === 0 ? '#f8f6f2' : '#ffffff';
-        doc.rect(colX - 2, rowY - 2, pageWidth, 18).fill(bgColor);
-        doc.fontSize(9).font('Helvetica-Bold').fillColor('#7a7060')
-           .text(row[0] + ':', colX, rowY, { width: 150 });
-        doc.fontSize(9).font('Helvetica').fillColor('#1a3a4a')
-           .text(row[1], valX, rowY, { width: 300 });
-        rowY += 18;
-      });
-      
-      doc.y = rowY + 10;
-      
-      // ─── Terms & Conditions ───
-      doc.fontSize(11).font('Helvetica-Bold').fillColor('#1a3a4a')
-         .text('Terms & Conditions:');
-      doc.moveDown(0.3);
-      
-      CONTRACT_TERMS.forEach((term, i) => {
-        doc.fontSize(7).font('Helvetica').fillColor('#4a4540')
-           .text((i + 1) + '. ' + term, colX, doc.y, { 
-             width: pageWidth - 4, 
-             lineGap: 1 
-           });
-        doc.moveDown(0.15);
-      });
-      
-      doc.moveDown(0.5);
-      
-      // ─── Acknowledgment ───
-      doc.rect(colX - 2, doc.y - 4, pageWidth, 22).fill('#fdf8f0').stroke('#c9a961');
-      doc.fontSize(8).font('Helvetica-Bold').fillColor('#5a5045')
-         .text('The tenant acknowledges reading, understanding, and agreeing to all terms and conditions stated above.', colX + 4, doc.y, { width: pageWidth - 10 });
-      doc.moveDown(1);
-      
-      // ─── Signature Section ───
-      doc.fontSize(11).font('Helvetica-Bold').fillColor('#1a3a4a')
-         .text('Digital Signature:');
-      doc.moveDown(0.3);
-      
-      if (signatureDataURL && signatureDataURL.startsWith('data:')) {
-        try {
-          const sigBase64 = signatureDataURL.replace(/^data:image\/\w+;base64,/, '');
-          const sigBuffer = Buffer.from(sigBase64, 'base64');
-          doc.image(sigBuffer, colX, doc.y, { width: 200, height: 80 });
-          doc.moveDown(0.3);
-        } catch (sigErr) {
-          console.error('Failed to embed signature in PDF:', sigErr.message);
-          doc.fontSize(9).fillColor('#c0392b').text('[Signature image could not be embedded]');
-        }
-      } else {
-        doc.fontSize(9).fillColor('#888888').text('[No signature available]');
-      }
-      
-      doc.moveDown(0.5);
-      
-      // Signed date
-      const signedDate = b.signedAt ? new Date(b.signedAt).toLocaleString('en-GB', { dateStyle: 'long', timeStyle: 'short' }) : new Date().toLocaleString('en-GB', { dateStyle: 'long', timeStyle: 'short' });
-      doc.fontSize(8).font('Helvetica').fillColor('#888888')
-         .text('Signed on: ' + signedDate, { align: 'left' });
-      
-      // ─── Footer ───
-      doc.moveDown(1);
-      doc.strokeColor('#c9a961').lineWidth(1)
-         .moveTo(40, doc.y).lineTo(555, doc.y).stroke();
-      doc.moveDown(0.3);
-      doc.fontSize(7).fillColor('#888888')
-         .text('Retreat Beach House - Al Khiran, Phase 5, Kuwait | retreatbh.com', { align: 'center' });
-      
-      doc.end();
-    } catch (err) {
-      reject(err);
-    }
-  });
+  const termsHtml = CONTRACT_TERMS.map((t, i) => 
+    `<div style="margin-bottom:4px;font-size:10px;color:#4a4540;line-height:1.5;"><strong style="color:#c9a961;">${i+1}.</strong> ${t}</div>`
+  ).join('');
+
+  const sigImg = (signatureDataURL && signatureDataURL.startsWith('data:'))
+    ? `<img src="${signatureDataURL}" style="max-width:220px;max-height:90px;" />`
+    : '<span style="color:#999;">لا يوجد توقيع</span>';
+
+  const html = `<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="UTF-8">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap');
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Tajawal',sans-serif; background:#fff; color:#1a3a4a; padding:30px 40px; direction:rtl; }
+  .header { text-align:center; margin-bottom:10px; }
+  .header h1 { font-size:28px; color:#1a3a4a; letter-spacing:4px; margin-bottom:2px; font-weight:800; }
+  .header .sub { font-size:12px; color:#7a7060; margin-bottom:2px; }
+  .header .loc { font-size:10px; color:#aaa; }
+  .gold-line { height:2px; background:linear-gradient(90deg,transparent,#c9a961,transparent); margin:12px 0; }
+  .title { text-align:center; font-size:18px; font-weight:700; color:#c9a961; margin-bottom:16px; }
+  .section-title { font-size:13px; font-weight:700; color:#1a3a4a; margin-bottom:8px; padding-bottom:4px; border-bottom:1px solid #e8dcc8; }
+  .details-table { width:100%; border-collapse:collapse; margin-bottom:14px; }
+  .details-table tr:nth-child(even) { background:#fdf8f0; }
+  .details-table td { padding:6px 10px; font-size:11px; border-bottom:1px solid #f0ebe0; }
+  .details-table td:first-child { font-weight:700; color:#7a7060; width:35%; }
+  .details-table td:last-child { color:#1a3a4a; }
+  .terms-box { background:#fdf8f0; border:1px solid #e8dcc8; border-radius:8px; padding:12px 14px; margin-bottom:12px; }
+  .ack-box { background:#f5efe5; border:1px solid #c9a961; border-radius:6px; padding:10px 14px; text-align:center; font-size:11px; font-weight:700; color:#5a5045; margin-bottom:14px; }
+  .sig-section { margin-bottom:10px; }
+  .sig-section .sig-label { font-size:11px; color:#7a7060; margin-bottom:4px; }
+  .sig-section .sig-date { font-size:9px; color:#aaa; margin-top:4px; }
+  .footer { text-align:center; font-size:8px; color:#aaa; border-top:1px solid #e8dcc8; padding-top:8px; margin-top:10px; }
+</style>
+</head>
+<body>
+  <div class="header">
+    <h1>RETREAT</h1>
+    <div class="sub">Private Beach House</div>
+    <div class="loc">الخيران - المرحلة الخامسة - الكويت</div>
+  </div>
+  <div class="gold-line"></div>
+  <div class="title">عقد إيجار / اتفاقية حجز</div>
+
+  <div class="section-title">بيانات الحجز</div>
+  <table class="details-table">
+    <tr><td>اسم المستأجر</td><td>${b.name || '-'}</td></tr>
+    <tr><td>رقم الهاتف</td><td style="direction:ltr;text-align:right;">${b.phone || '-'}</td></tr>
+    <tr><td>البريد الإلكتروني</td><td style="direction:ltr;text-align:right;">${b.email || '-'}</td></tr>
+    <tr><td>الرقم المدني</td><td style="direction:ltr;text-align:right;">${b.civilId || '-'}</td></tr>
+    <tr><td>تاريخ الدخول</td><td>${b.checkIn || '-'}</td></tr>
+    <tr><td>تاريخ الخروج</td><td>${b.checkOut || '-'}</td></tr>
+    <tr><td>الباقة</td><td>${b.packageName || b.package || '-'}</td></tr>
+    <tr><td>مبلغ الإيجار</td><td>${b.price || '-'} د.ك</td></tr>
+    <tr><td>مبلغ التأمين</td><td>${b.securityDeposit || '100'} د.ك</td></tr>
+    <tr><td>عدد الضيوف</td><td>${b.guests || '-'}</td></tr>
+  </table>
+
+  <div class="section-title">الشروط والأحكام</div>
+  <div class="terms-box">${termsHtml}</div>
+
+  <div class="ack-box">يقر المستأجر بأنه قد قرأ وفهم ووافق على جميع الشروط والأحكام المذكورة أعلاه.</div>
+
+  <div class="section-title">التوقيع الرقمي</div>
+  <div class="sig-section">
+    ${sigImg}
+    <div class="sig-date">تاريخ التوقيع: ${signedDate}</div>
+  </div>
+
+  <div class="footer">
+    <div class="gold-line"></div>
+    شاليه ريتريت - الخيران، المرحلة الخامسة، الكويت | retreatbh.com
+  </div>
+</body>
+</html>`;
+
+  let browser;
+  try {
+    browser = await puppeteer.launch({
+      headless: 'new',
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+    });
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: 'networkidle0', timeout: 15000 });
+    const pdfBuffer = await page.pdf({
+      format: 'A4',
+      printBackground: true,
+      margin: { top: '10mm', bottom: '10mm', left: '10mm', right: '10mm' }
+    });
+    return Buffer.from(pdfBuffer);
+  } catch (err) {
+    console.error('PDF generation error:', err.message);
+    throw err;
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+  }
 }
 
 // ─── Send signed contract PDF via email ─────────────────────────────────────
