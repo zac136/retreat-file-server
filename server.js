@@ -95,7 +95,7 @@ async function getBookingsData() {
     }
   `);
   const metafield = data?.shop?.metafield;
-  let parsed = { bookings: [], bookedDates: [] };
+  let parsed = { bookings: [], bookedDates: [], blockedDates: [], trash: [] };
   if (metafield?.value) {
     try { parsed = JSON.parse(metafield.value); } catch(e) {}
   }
@@ -103,6 +103,8 @@ async function getBookingsData() {
 }
 
 async function setBookingsData(payload) {
+  // Ensure trash array exists
+  if (!payload.trash) payload.trash = [];
   return shopifyGraphQL(`
     mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
       metafieldsSet(metafields: $metafields) {
@@ -333,7 +335,7 @@ app.get('/get-bookings', async (req, res) => {
       return updated;
     });
     
-    res.json({ success: true, bookings, bookedDates: data.bookedDates || [], blockedDates: data.blockedDates || [] });
+    res.json({ success: true, bookings, bookedDates: data.bookedDates || [], blockedDates: data.blockedDates || [], trash: data.trash || [] });
   } catch (error) {
     console.error('Get bookings error:', error);
     res.status(500).json({ error: error.message });
@@ -547,7 +549,7 @@ app.delete('/cancel-booking/:id', async (req, res) => {
   }
 });
 
-// ─── Delete booking permanently ───────────────────────────────────────────────
+// ─── Delete booking (move to trash instead of permanent delete) ──────────────
 
 app.delete('/delete-booking/:id', async (req, res) => {
   try {
@@ -555,14 +557,131 @@ app.delete('/delete-booking/:id', async (req, res) => {
 
     const { data: existingData } = await getBookingsData();
     existingData.bookings = existingData.bookings || [];
+    existingData.trash = existingData.trash || [];
 
-    const before = existingData.bookings.length;
-    existingData.bookings = existingData.bookings.filter(b => b.id !== id);
+    const idx = existingData.bookings.findIndex(b => b.id === id);
+    if (idx === -1) return res.status(404).json({ error: 'Booking not found' });
+
+    // Move to trash instead of permanent delete
+    const deletedBooking = existingData.bookings[idx];
+    deletedBooking.deletedAt = new Date().toISOString();
+    existingData.trash.unshift(deletedBooking);
+
+    // Keep only last 50 items in trash
+    if (existingData.trash.length > 50) {
+      existingData.trash = existingData.trash.slice(0, 50);
+    }
+
+    // Remove from active bookings
+    existingData.bookings.splice(idx, 1);
     existingData.bookedDates = (existingData.bookedDates || [])
       .filter(d => d.bookingId !== id);
 
-    if (existingData.bookings.length === before) {
-      return res.status(404).json({ error: 'Booking not found' });
+    // Also remove from blockedDates if exists
+    existingData.blockedDates = (existingData.blockedDates || [])
+      .filter(d => d.bookingId !== id);
+
+    const result = await setBookingsData(existingData);
+    if (result?.metafieldsSet?.userErrors?.length > 0) {
+      return res.status(500).json({ error: 'Failed to delete booking' });
+    }
+
+    console.log(`Booking ${id} (${deletedBooking.name}) moved to trash`);
+    res.json({ success: true, message: 'تم نقل الحجز إلى سلة المحذوفات' });
+  } catch (error) {
+    console.error('Delete booking error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Get trash (deleted bookings) ────────────────────────────────────────────
+
+app.get('/get-trash', async (req, res) => {
+  try {
+    const { data } = await getBookingsData();
+    const trash = data.trash || [];
+    
+    // Auto-clean: remove items older than 30 days
+    const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
+    const activeTrash = trash.filter(item => {
+      const deletedAt = new Date(item.deletedAt).getTime();
+      return deletedAt > thirtyDaysAgo;
+    });
+    
+    // If some items were cleaned, save back
+    if (activeTrash.length < trash.length) {
+      const { data: existingData } = await getBookingsData();
+      existingData.trash = activeTrash;
+      await setBookingsData(existingData);
+      console.log(`Auto-cleaned ${trash.length - activeTrash.length} expired trash items`);
+    }
+    
+    res.json({ success: true, trash: activeTrash });
+  } catch (error) {
+    console.error('Get trash error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Restore booking from trash ──────────────────────────────────────────────
+
+app.post('/restore-booking/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { data: existingData } = await getBookingsData();
+    existingData.trash = existingData.trash || [];
+    existingData.bookings = existingData.bookings || [];
+    existingData.bookedDates = existingData.bookedDates || [];
+
+    const trashIdx = existingData.trash.findIndex(b => b.id === id);
+    if (trashIdx === -1) return res.status(404).json({ error: 'الحجز غير موجود في سلة المحذوفات' });
+
+    // Restore from trash
+    const restoredBooking = existingData.trash[trashIdx];
+    delete restoredBooking.deletedAt;
+    restoredBooking.status = restoredBooking.status === 'cancelled' ? 'cancelled' : 'confirmed';
+
+    // Add back to bookings
+    existingData.bookings.unshift(restoredBooking);
+    existingData.trash.splice(trashIdx, 1);
+
+    // Re-add to bookedDates if confirmed
+    if (restoredBooking.status === 'confirmed' && restoredBooking.checkIn && restoredBooking.checkOut) {
+      existingData.bookedDates.push({
+        start: restoredBooking.checkIn,
+        end: restoredBooking.checkOut,
+        bookingId: restoredBooking.id
+      });
+    }
+
+    const result = await setBookingsData(existingData);
+    if (result?.metafieldsSet?.userErrors?.length > 0) {
+      return res.status(500).json({ error: 'فشل في استرجاع الحجز' });
+    }
+
+    console.log(`Booking ${id} (${restoredBooking.name}) restored from trash`);
+    res.json({ success: true, message: 'تم استرجاع الحجز بنجاح', booking: restoredBooking });
+  } catch (error) {
+    console.error('Restore booking error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Permanently delete from trash ───────────────────────────────────────────
+
+app.delete('/permanent-delete/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { data: existingData } = await getBookingsData();
+    existingData.trash = existingData.trash || [];
+
+    const before = existingData.trash.length;
+    existingData.trash = existingData.trash.filter(b => b.id !== id);
+
+    if (existingData.trash.length === before) {
+      return res.status(404).json({ error: 'الحجز غير موجود في سلة المحذوفات' });
     }
 
     // Also remove civil ID image
@@ -574,14 +693,65 @@ app.delete('/delete-booking/:id', async (req, res) => {
       }
     } catch (e) {}
 
+    // Also remove signature
+    try {
+      const sigMap = await getSignatures();
+      if (sigMap[id]) {
+        delete sigMap[id];
+        await setSignatures(sigMap);
+      }
+    } catch (e) {}
+
     const result = await setBookingsData(existingData);
     if (result?.metafieldsSet?.userErrors?.length > 0) {
-      return res.status(500).json({ error: 'Failed to delete booking' });
+      return res.status(500).json({ error: 'فشل في الحذف النهائي' });
     }
 
-    res.json({ success: true, message: 'Booking deleted permanently' });
+    console.log(`Booking ${id} permanently deleted from trash`);
+    res.json({ success: true, message: 'تم الحذف النهائي' });
   } catch (error) {
-    console.error('Delete booking error:', error);
+    console.error('Permanent delete error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Empty entire trash ──────────────────────────────────────────────────────
+
+app.delete('/empty-trash', async (req, res) => {
+  try {
+    const { data: existingData } = await getBookingsData();
+    const trashCount = (existingData.trash || []).length;
+    
+    // Clean up images and signatures for trashed items
+    const trashIds = (existingData.trash || []).map(b => b.id);
+    try {
+      const imagesMap = await getCivilIdImages();
+      let changed = false;
+      trashIds.forEach(id => {
+        if (imagesMap[id]) { delete imagesMap[id]; changed = true; }
+      });
+      if (changed) await setCivilIdImages(imagesMap);
+    } catch (e) {}
+    
+    try {
+      const sigMap = await getSignatures();
+      let changed = false;
+      trashIds.forEach(id => {
+        if (sigMap[id]) { delete sigMap[id]; changed = true; }
+      });
+      if (changed) await setSignatures(sigMap);
+    } catch (e) {}
+
+    existingData.trash = [];
+    const result = await setBookingsData(existingData);
+    if (result?.metafieldsSet?.userErrors?.length > 0) {
+      return res.status(500).json({ error: 'فشل في تفريغ سلة المحذوفات' });
+    }
+
+    console.log(`Trash emptied (${trashCount} items)`);
+    res.json({ success: true, message: 'تم تفريغ سلة المحذوفات (' + trashCount + ' حجز)' });
+  } catch (error) {
+    console.error('Empty trash error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -610,6 +780,39 @@ app.post('/set-blocked-dates', async (req, res) => {
     res.json({ success: true, count: blockedDates.length });
   } catch (error) {
     console.error('Set blocked dates error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Clean orphan blocked dates (blocked dates with no matching booking) ─────
+
+app.post('/clean-blocked-dates', async (req, res) => {
+  try {
+    const { data: existingData } = await getBookingsData();
+    const bookingIds = new Set((existingData.bookings || []).map(b => b.id));
+    const before = (existingData.blockedDates || []).length;
+    
+    // Keep only blocked dates that either:
+    // 1. Have no bookingId (manually blocked)
+    // 2. Have a bookingId that exists in active bookings
+    existingData.blockedDates = (existingData.blockedDates || []).filter(d => {
+      if (!d.bookingId) return true; // manually blocked - keep
+      return bookingIds.has(d.bookingId); // only keep if booking exists
+    });
+    
+    const removed = before - existingData.blockedDates.length;
+    
+    if (removed > 0) {
+      const result = await setBookingsData(existingData);
+      if (result?.metafieldsSet?.userErrors?.length > 0) {
+        return res.status(500).json({ error: 'Failed to clean blocked dates' });
+      }
+    }
+    
+    console.log(`Cleaned ${removed} orphan blocked dates`);
+    res.json({ success: true, removed, remaining: existingData.blockedDates.length });
+  } catch (error) {
+    console.error('Clean blocked dates error:', error);
     res.status(500).json({ error: error.message });
   }
 });
