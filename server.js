@@ -832,27 +832,52 @@ loadBooking();
 
 // ─── Email notification ─────────────────────────────────────────────────────
 
-const nodemailer = require('nodemailer');
+// Email sending via Resend HTTP API (Render blocks SMTP ports on free tier)
+// Resend free tier: 100 emails/day, 3000/month - perfect for booking notifications
+// If RESEND_API_KEY is not set, falls back to storing notification in metafield
 
-// Gmail SMTP transporter - uses App Password
-function createEmailTransporter() {
-  const pass = process.env.EMAIL_PASS || '';
-  console.log('Creating email transporter, EMAIL_USER:', process.env.EMAIL_USER || 'NOT SET', ', EMAIL_PASS length:', pass.length);
-  return nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 465,
-    secure: true,
-    auth: {
-      user: process.env.EMAIL_USER || 'retreat.kuwait@gmail.com',
-      pass: pass
+async function sendEmailHTTP({ to, from, subject, html, attachments }) {
+  const apiKey = process.env.RESEND_API_KEY;
+  
+  if (!apiKey) {
+    console.log('RESEND_API_KEY not set, skipping email send');
+    return { skipped: true, reason: 'No RESEND_API_KEY' };
+  }
+  
+  const payload = {
+    from: from || 'Retreat Beach House <onboarding@resend.dev>',
+    to: Array.isArray(to) ? to : [to],
+    subject: subject,
+    html: html
+  };
+  
+  // Add attachments if any
+  if (attachments && attachments.length > 0) {
+    payload.attachments = attachments.map(att => ({
+      filename: att.filename,
+      content: att.content instanceof Buffer ? att.content.toString('base64') : att.content,
+      content_type: att.contentType || 'application/octet-stream'
+    }));
+  }
+  
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json'
     },
-    connectionTimeout: 15000,
-    greetingTimeout: 15000,
-    socketTimeout: 20000
+    body: JSON.stringify(payload)
   });
+  
+  const data = await response.json();
+  
+  if (!response.ok) {
+    throw new Error(`Resend API error: ${response.status} - ${JSON.stringify(data)}`);
+  }
+  
+  console.log('Email sent via Resend:', data.id);
+  return data;
 }
-
-let emailTransporter = createEmailTransporter();
 
 // Shared email sending function
 async function sendBookingEmail(booking, civilIdImage) {
@@ -913,27 +938,15 @@ async function sendBookingEmail(booking, civilIdImage) {
     }
   }
 
-  const mailOptions = {
-    from: '"شاليه ريتريت" <' + (process.env.EMAIL_USER || 'retreat.kuwait@gmail.com') + '>',
+  const result = await sendEmailHTTP({
+    from: 'Retreat Beach House <onboarding@resend.dev>',
     to: adminEmail,
     subject: '🏖️ حجز جديد - ' + (b.name || 'عميل') + ' | ' + (b.checkIn || ''),
     html: htmlBody,
     attachments: attachments.length > 0 ? attachments : undefined
-  };
-
-  // Try sending with timeout and retry
-  try {
-    const info = await emailTransporter.sendMail(mailOptions);
-    console.log('Email sent:', info.messageId);
-    return info;
-  } catch (firstErr) {
-    console.error('First email attempt failed:', firstErr.message);
-    // Recreate transporter and retry once
-    emailTransporter = createEmailTransporter();
-    const info = await emailTransporter.sendMail(mailOptions);
-    console.log('Email sent on retry:', info.messageId);
-    return info;
-  }
+  });
+  
+  return result;
 }
 
 // Manual email endpoint (kept for backward compatibility)
