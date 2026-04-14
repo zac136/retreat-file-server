@@ -330,7 +330,7 @@ app.get('/get-bookings', async (req, res) => {
     }
 
     // Restore images and signatures into bookings
-    const bookings = (data.bookings || []).map(b => {
+    const allBookings = (data.bookings || []).map(b => {
       let updated = b;
       if (b.civilIdImageUrl === 'STORED_IN_IMAGES' && imagesMap[b.id]) {
         updated = { ...updated, civilIdImageUrl: imagesMap[b.id] };
@@ -340,8 +340,13 @@ app.get('/get-bookings', async (req, res) => {
       }
       return updated;
     });
+    // Filter out trashed bookings from active list
+    const bookings = allBookings.filter(b => b.status !== 'trashed');
+    // Filter out bookedDates for trashed bookings
+    const trashedIds = allBookings.filter(b => b.status === 'trashed').map(b => String(b.id));
+    const bookedDates = (data.bookedDates || []).filter(d => !trashedIds.includes(String(d.bookingId)));
     
-    res.json({ success: true, bookings, bookedDates: data.bookedDates || [], blockedDates: data.blockedDates || [], trash: data.trash || [] });
+    res.json({ success: true, bookings, bookedDates, blockedDates: data.blockedDates || [], trash: data.trash || [] });
   } catch (error) {
     console.error('Get bookings error:', error);
     res.status(500).json({ error: error.message });
