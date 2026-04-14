@@ -588,9 +588,29 @@ app.delete('/delete-booking/:id', async (req, res) => {
     existingData.bookedDates = (existingData.bookedDates || [])
       .filter(d => d.bookingId !== id);
 
-    // Also remove from blockedDates if exists
+    // Also remove from blockedDates if exists (objects with bookingId)
     existingData.blockedDates = (existingData.blockedDates || [])
-      .filter(d => d.bookingId !== id);
+      .filter(d => {
+        // Remove objects with matching bookingId
+        if (typeof d === 'object' && d.bookingId) return d.bookingId !== id;
+        // Remove string dates that fall within the deleted booking's date range
+        if (typeof d === 'string' && deletedBooking.checkIn && deletedBooking.checkOut) {
+          // Parse D/M/YYYY format
+          const parseDMY = (s) => {
+            const parts = s.split('/');
+            if (parts.length === 3) return new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+            return new Date(NaN);
+          };
+          const startDate = parseDMY(deletedBooking.checkIn);
+          const endDate = parseDMY(deletedBooking.checkOut);
+          const dateToCheck = parseDMY(d);
+          if (!isNaN(startDate.getTime()) && !isNaN(endDate.getTime()) && !isNaN(dateToCheck.getTime())) {
+            // If this date falls within the booking range, remove it
+            if (dateToCheck >= startDate && dateToCheck <= endDate) return false;
+          }
+        }
+        return true;
+      });
 
     const result = await setBookingsData(existingData);
     if (result?.metafieldsSet?.userErrors?.length > 0) {
