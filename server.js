@@ -1123,7 +1123,8 @@ async function generateContractPDF(booking, signatureDataURL) {
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700&display=swap" rel="stylesheet">
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: "Tajawal", Arial, sans-serif; direction: rtl; padding: 0 6px; color: #2d2d2d; max-width: 800px; margin: 0 auto; font-size: 12px; line-height: 1.3; }
+html { background: #f5f0eb; }
+body { font-family: "Tajawal", Arial, sans-serif; direction: rtl; padding: 0 6px; color: #2d2d2d; max-width: 800px; margin: 0 auto; font-size: 12px; line-height: 1.3; background: #f5f0eb; }
 .header { text-align: center; margin-bottom: 2px; }
 .header img { max-width: 60px; margin: 0 auto 2px; display: block; }
 .contract-title { text-align: center; font-size: 15px; font-weight: 700; margin-bottom: 1px; }
