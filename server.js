@@ -95,7 +95,7 @@ async function getBookingsData() {
     }
   `);
   const metafield = data?.shop?.metafield;
-  let parsed = { bookings: [], bookedDates: [], blockedDates: [], trash: [] };
+  let parsed = { bookings: [], bookedDates: [], blockedDates: [], trash: [], custom_prices: [], seasonal_prices: null };
   if (metafield?.value) {
     try { parsed = JSON.parse(metafield.value); } catch(e) {}
   }
@@ -346,7 +346,12 @@ app.get('/get-bookings', async (req, res) => {
     const trashedIds = allBookings.filter(b => b.status === 'trashed').map(b => String(b.id));
     const bookedDates = (data.bookedDates || []).filter(d => !trashedIds.includes(String(d.bookingId)));
     
-    res.json({ success: true, bookings, bookedDates, blockedDates: data.blockedDates || [], trash: data.trash || [] });
+    const defaults = {
+      s1: { 'thu-sat': 300, 'sun-wed': 300, 'sun-sat': 500 },
+      s2: { 'thu-sat': 350, 'sun-wed': 350, 'sun-sat': 600 },
+      s3: { 'thu-sat': 400, 'sun-wed': 400, 'sun-sat': 700 }
+    };
+    res.json({ success: true, bookings, bookedDates, blockedDates: data.blockedDates || [], trash: data.trash || [], custom_prices: data.custom_prices || [], seasonal_prices: data.seasonal_prices || defaults });
   } catch (error) {
     console.error('Get bookings error:', error);
     res.status(500).json({ error: error.message });
@@ -844,6 +849,67 @@ app.post('/clean-blocked-dates', async (req, res) => {
     res.json({ success: true, removed, remaining: existingData.blockedDates.length });
   } catch (error) {
     console.error('Clean blocked dates error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Custom Prices (get/set) ──────────────────────────────────────────────────
+
+app.get('/get-custom-prices', async (req, res) => {
+  try {
+    const { data } = await getBookingsData();
+    res.json({ success: true, custom_prices: data.custom_prices || [] });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/set-custom-prices', async (req, res) => {
+  try {
+    const { custom_prices } = req.body;
+    if (!Array.isArray(custom_prices)) return res.status(400).json({ error: 'custom_prices must be an array' });
+    const { data: existingData } = await getBookingsData();
+    existingData.custom_prices = custom_prices;
+    const result = await setBookingsData(existingData);
+    if (result?.metafieldsSet?.userErrors?.length > 0) {
+      return res.status(500).json({ error: 'Failed to save custom prices', details: result.metafieldsSet.userErrors });
+    }
+    res.json({ success: true, count: custom_prices.length });
+  } catch (error) {
+    console.error('Set custom prices error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Seasonal/Default Prices (get/set) ────────────────────────────────────────
+
+app.get('/get-seasonal-prices', async (req, res) => {
+  try {
+    const { data } = await getBookingsData();
+    const defaults = {
+      s1: { 'thu-sat': 300, 'sun-wed': 300, 'sun-sat': 500 },
+      s2: { 'thu-sat': 350, 'sun-wed': 350, 'sun-sat': 600 },
+      s3: { 'thu-sat': 400, 'sun-wed': 400, 'sun-sat': 700 }
+    };
+    res.json({ success: true, seasonal_prices: data.seasonal_prices || defaults });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/set-seasonal-prices', async (req, res) => {
+  try {
+    const { seasonal_prices } = req.body;
+    if (!seasonal_prices || typeof seasonal_prices !== 'object') return res.status(400).json({ error: 'seasonal_prices must be an object' });
+    const { data: existingData } = await getBookingsData();
+    existingData.seasonal_prices = seasonal_prices;
+    const result = await setBookingsData(existingData);
+    if (result?.metafieldsSet?.userErrors?.length > 0) {
+      return res.status(500).json({ error: 'Failed to save seasonal prices', details: result.metafieldsSet.userErrors });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Set seasonal prices error:', error);
     res.status(500).json({ error: error.message });
   }
 });
