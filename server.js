@@ -276,6 +276,10 @@ app.post('/save-booking', async (req, res) => {
       }
     }
 
+    // Save contractHTML for email, then remove from booking before storing in metafield
+    const contractHTML = booking.contractHTML || '';
+    delete booking.contractHTML;
+
     existingData.bookings.unshift(booking);
     if (booking.checkIn && booking.checkOut) {
       existingData.bookedDates.push({ start: booking.checkIn, end: booking.checkOut, bookingId: booking.id });
@@ -287,8 +291,10 @@ app.post('/save-booking', async (req, res) => {
     }
 
     // Send email notification automatically after successful save
+    // Temporarily add contractHTML back for email generation
     try {
-      await sendBookingEmail(booking, civilIdImage);
+      const bookingForEmail = { ...booking, contractHTML };
+      await sendBookingEmail(bookingForEmail, civilIdImage);
       console.log('Auto email sent for booking', booking.id);
     } catch (emailErr) {
       console.error('Auto email failed:', emailErr.message);
@@ -1315,27 +1321,38 @@ async function sendBookingEmail(booking, civilIdImage) {
     }
   }
 
-  // Generate and attach signed contract PDF if signature exists
+  // Attach contract as HTML file (sent from client) or try Puppeteer PDF as fallback
   try {
-    let sigDataForPDF = null;
-    if (b.signatureDataURL === 'STORED_IN_SIGNATURES') {
-      // Retrieve actual signature from separate storage
-      const sigMap = await getSignatures();
-      sigDataForPDF = sigMap[b.id] || null;
-    } else if (b.signatureDataURL && b.signatureDataURL.startsWith('data:')) {
-      sigDataForPDF = b.signatureDataURL;
-    }
-    if (sigDataForPDF) {
-      const pdfBuffer = await generateContractPDF(b, sigDataForPDF);
+    if (b.contractHTML && b.contractHTML.length > 100) {
+      // Client sent the contract HTML - attach it directly as HTML file
+      const htmlBuffer = Buffer.from(b.contractHTML, 'utf-8');
       attachments.push({
-        filename: `contract-${b.name || 'customer'}.pdf`,
-        content: pdfBuffer,
-        contentType: 'application/pdf'
+        filename: `contract-${b.name || 'customer'}.html`,
+        content: htmlBuffer,
+        contentType: 'text/html'
       });
-      console.log('\u2705 Contract PDF attached to booking email');
+      console.log('✅ Contract HTML attached to booking email (from client)');
+    } else {
+      // Fallback: try to generate PDF with Puppeteer (may fail on some hosts)
+      let sigDataForPDF = null;
+      if (b.signatureDataURL === 'STORED_IN_SIGNATURES') {
+        const sigMap = await getSignatures();
+        sigDataForPDF = sigMap[b.id] || null;
+      } else if (b.signatureDataURL && b.signatureDataURL.startsWith('data:')) {
+        sigDataForPDF = b.signatureDataURL;
+      }
+      if (sigDataForPDF) {
+        const pdfBuffer = await generateContractPDF(b, sigDataForPDF);
+        attachments.push({
+          filename: `contract-${b.name || 'customer'}.pdf`,
+          content: pdfBuffer,
+          contentType: 'application/pdf'
+        });
+        console.log('✅ Contract PDF attached to booking email (Puppeteer)');
+      }
     }
   } catch (pdfErr) {
-    console.error('Failed to generate contract PDF for booking email:', pdfErr.message);
+    console.error('Failed to attach contract to booking email:', pdfErr.message);
   }
 
   const result = await sendEmailHTTP({
