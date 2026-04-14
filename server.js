@@ -1473,6 +1473,107 @@ app.post('/update-theme-file', async (req, res) => {
   }
 });
 
+// ─── Attachments metafield helpers ────────────────────────────────────────────
+
+async function getAttachments() {
+  const data = await shopifyGraphQL(`
+    query {
+      shop {
+        metafield(namespace: "retreat", key: "attachments") {
+          id
+          value
+        }
+      }
+    }
+  `);
+  const metafield = data?.shop?.metafield;
+  let parsed = {};
+  if (metafield?.value) {
+    try { parsed = JSON.parse(metafield.value); } catch(e) {}
+  }
+  return parsed;
+}
+
+async function setAttachments(attMap) {
+  return shopifyGraphQL(`
+    mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
+      metafieldsSet(metafields: $metafields) {
+        metafields { id key value }
+        userErrors { field message }
+      }
+    }
+  `, {
+    metafields: [{
+      ownerId: SHOP_ID,
+      namespace: 'retreat',
+      key: 'attachments',
+      value: JSON.stringify(attMap),
+      type: 'json'
+    }]
+  });
+}
+
+// Upload attachment for a booking
+app.post('/upload-attachment/:bookingId', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file provided' });
+    const bookingId = req.params.bookingId;
+    const file = req.file;
+    const filename = (req.body.filename || file.originalname || 'attachment').replace(/[/\\]/g, '_');
+    console.log(`Uploading attachment for booking ${bookingId}: ${filename} (${file.size} bytes)`);
+
+    const base64 = file.buffer.toString('base64');
+    const dataUrl = `data:${file.mimetype};base64,${base64}`;
+
+    // Get existing attachments
+    const attMap = await getAttachments();
+    if (!attMap[bookingId]) attMap[bookingId] = [];
+    attMap[bookingId].push({
+      id: Date.now().toString(36),
+      filename: filename,
+      mimetype: file.mimetype,
+      size: file.size,
+      dataUrl: dataUrl,
+      uploadedAt: new Date().toISOString()
+    });
+
+    await setAttachments(attMap);
+    res.json({ success: true, attachments: attMap[bookingId].map(a => ({ id: a.id, filename: a.filename, mimetype: a.mimetype, size: a.size, uploadedAt: a.uploadedAt })) });
+  } catch (error) {
+    console.error('Upload attachment error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get attachments for a booking
+app.get('/get-attachments/:bookingId', async (req, res) => {
+  try {
+    const attMap = await getAttachments();
+    const atts = attMap[req.params.bookingId] || [];
+    res.json({ success: true, attachments: atts });
+  } catch (error) {
+    console.error('Get attachments error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete attachment
+app.delete('/delete-attachment/:bookingId/:attachmentId', async (req, res) => {
+  try {
+    const attMap = await getAttachments();
+    const bookingId = req.params.bookingId;
+    const attachmentId = req.params.attachmentId;
+    if (attMap[bookingId]) {
+      attMap[bookingId] = attMap[bookingId].filter(a => a.id !== attachmentId);
+      await setAttachments(attMap);
+    }
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Delete attachment error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ─── Start server ─────────────────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 3001;
