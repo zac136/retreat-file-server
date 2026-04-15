@@ -1895,6 +1895,82 @@ app.post('/cleanup-attachments', async (req, res) => {
   }
 });
 
+// ─── Invoice Storage (Shopify Metafield) ──────────────────────────────────────
+
+async function getInvoices() {
+  const data = await shopifyGraphQL(`
+    query {
+      shop {
+        metafield(namespace: "retreat", key: "invoices") {
+          id
+          value
+        }
+      }
+    }
+  `);
+  const metafield = data?.shop?.metafield;
+  let parsed = {};
+  if (metafield?.value) {
+    try { parsed = JSON.parse(metafield.value); } catch(e) {}
+  }
+  return parsed;
+}
+
+async function setInvoices(invoiceMap) {
+  const jsonValue = JSON.stringify(invoiceMap);
+  console.log(`[setInvoices] Saving metafield, size: ${jsonValue.length} bytes`);
+  const result = await shopifyGraphQL(`
+    mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
+      metafieldsSet(metafields: $metafields) {
+        metafields { id key value }
+        userErrors { field message }
+      }
+    }
+  `, {
+    metafields: [{
+      ownerId: SHOP_ID,
+      namespace: 'retreat',
+      key: 'invoices',
+      value: jsonValue,
+      type: 'json'
+    }]
+  });
+  const userErrors = result?.metafieldsSet?.userErrors;
+  if (userErrors?.length) {
+    console.error('[setInvoices] Shopify userErrors:', JSON.stringify(userErrors));
+    throw new Error('Failed to save invoices: ' + JSON.stringify(userErrors));
+  }
+  console.log('[setInvoices] Saved successfully');
+  return result;
+}
+
+// Get all invoices
+app.get('/get-invoices', async (req, res) => {
+  try {
+    const invoices = await getInvoices();
+    res.json({ success: true, invoices });
+  } catch (error) {
+    console.error('Get invoices error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Save all invoices
+app.post('/save-invoices', async (req, res) => {
+  try {
+    const { invoices } = req.body;
+    if (!invoices || typeof invoices !== 'object') {
+      return res.status(400).json({ error: 'Invalid invoices data' });
+    }
+    await setInvoices(invoices);
+    console.log(`[save-invoices] Saved ${Object.keys(invoices).length} booking invoices`);
+    res.json({ success: true, count: Object.keys(invoices).length });
+  } catch (error) {
+    console.error('Save invoices error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ─── Start server ─────────────────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 3001;
