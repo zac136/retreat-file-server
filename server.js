@@ -1857,6 +1857,44 @@ app.delete('/delete-attachment/:bookingId/:attachmentId', async (req, res) => {
   }
 });
 
+
+// ─── Cleanup: remove base64 data from attachments metafield ──────────────────
+app.post('/cleanup-attachments', async (req, res) => {
+  try {
+    const attMap = await getAttachments();
+    let cleaned = 0;
+    let removed = 0;
+    
+    for (const [bookingId, atts] of Object.entries(attMap)) {
+      if (!Array.isArray(atts)) continue;
+      for (let i = atts.length - 1; i >= 0; i--) {
+        const att = atts[i];
+        if (att.dataUrl && att.dataUrl.startsWith('data:')) {
+          // Remove base64 data - either replace with CDN URL if provided, or remove
+          const cdnUrl = req.body?.replacements?.[att.id];
+          if (cdnUrl) {
+            att.dataUrl = cdnUrl;
+            cleaned++;
+          } else {
+            // Remove the attachment entirely if no CDN replacement
+            atts.splice(i, 1);
+            removed++;
+          }
+        }
+      }
+    }
+    
+    const jsonValue = JSON.stringify(attMap);
+    console.log(`[cleanup] Cleaned ${cleaned}, removed ${removed}. New size: ${jsonValue.length} chars`);
+    
+    await setAttachments(attMap);
+    res.json({ success: true, cleaned, removed, newSize: jsonValue.length });
+  } catch (error) {
+    console.error('Cleanup error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ─── Start server ─────────────────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 3001;
