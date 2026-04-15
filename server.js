@@ -1979,151 +1979,151 @@ const PORT = process.env.PORT || 3001;
 app.get('/receipt-override.js', (req, res) => {
   res.setHeader('Content-Type', 'application/javascript');
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  res.send(`
-(function() {
-  var attempts = 0;
-  var maxAttempts = 60; // 30 seconds max
+  res.setHeader('Access-Control-Allow-Origin', '*');
   
-  function applyOverride() {
-    if (typeof raGenerateReceiptPDF === 'undefined') {
-      attempts++;
-      if (attempts < maxAttempts) setTimeout(applyOverride, 500);
-      return;
-    }
+  const js = `
+(function() {
+  // Wait only for raGenerateReceiptPDF to be defined
+  var _checkInterval = setInterval(function() {
+    if (typeof window.raGenerateReceiptPDF !== 'function') return;
+    clearInterval(_checkInterval);
     
     // Check if already overridden
-    if (raGenerateReceiptPDF._pngOverride) return;
+    if (window.raGenerateReceiptPDF._pngOverride) return;
+    
+    // Check if already has the correct version (toBlob without jsPDF)
+    var fnStr = window.raGenerateReceiptPDF.toString();
+    if (fnStr.indexOf('toBlob') !== -1 && fnStr.indexOf('jsPDF') === -1) {
+      console.log('[Receipt Override] Already using PNG version');
+      return;
+    }
     
     console.log('[Receipt Override] Applying PNG override...');
     
     window.raGenerateReceiptPDF = function(bookingId, invoiceIdx) {
       var store = (typeof getInvoiceStore === 'function') ? getInvoiceStore() : JSON.parse(localStorage.getItem('ra_invoices') || '{}');
       var invoices = store[bookingId];
-      if (!invoices || !invoices[invoiceIdx]) { raToast('\u26a0\ufe0f \u0644\u0627 \u064a\u0648\u062c\u062f \u0625\u064a\u0635\u0627\u0644', 'error'); return; }
+      if (!invoices || !invoices[invoiceIdx]) { if(typeof raToast==='function') raToast('\\u26a0\\ufe0f \\u0644\\u0627 \\u064a\\u0648\\u062c\\u062f \\u0625\\u064a\\u0635\\u0627\\u0644', 'error'); return; }
       var inv = invoices[invoiceIdx];
-      var b = allBookings.find(function(x){return String(x.id)===String(bookingId);});
-      if (!b) { raToast('\u26a0\ufe0f \u0644\u0645 \u064a\u062a\u0645 \u0627\u0644\u0639\u062b\u0648\u0631 \u0639\u0644\u0649 \u0627\u0644\u062d\u062c\u0632', 'error'); return; }
+      var b = (typeof allBookings !== 'undefined') ? allBookings.find(function(x){return String(x.id)===String(bookingId);}) : null;
+      if (!b) { if(typeof raToast==='function') raToast('\\u26a0\\ufe0f \\u0644\\u0645 \\u064a\\u062a\\u0645 \\u0627\\u0644\\u0639\\u062b\\u0648\\u0631 \\u0639\\u0644\\u0649 \\u0627\\u0644\\u062d\\u062c\\u0632', 'error'); return; }
       
-      var typeName = inv.type==='deposit' ? '\u0625\u064a\u0635\u0627\u0644 \u0627\u0633\u062a\u0644\u0627\u0645 \u0639\u0631\u0628\u0648\u0646' : '\u0625\u064a\u0635\u0627\u0644 \u0627\u0633\u062a\u0644\u0627\u0645 \u0645\u0628\u0644\u063a \u0627\u0644\u0625\u064a\u062c\u0627\u0631';
-      var safeDate = (inv.date || new Date().toLocaleDateString('en-GB')).replace(/\//g, '-');
-      var safeName = (b.name || 'customer').replace(/\s+/g, '_');
-      var fileBase = (inv.type==='deposit' ? 'receipt_deposit' : 'receipt_rent') + '_' + safeName + '_' + safeDate;
-      var fileName = fileBase + '.png';
+      var typeName = inv.type==='deposit' ? '\\u0625\\u064a\\u0635\\u0627\\u0644 \\u0627\\u0633\\u062a\\u0644\\u0627\\u0645 \\u0639\\u0631\\u0628\\u0648\\u0646' : '\\u0625\\u064a\\u0635\\u0627\\u0644 \\u0627\\u0633\\u062a\\u0644\\u0627\\u0645 \\u0645\\u0628\\u0644\\u063a \\u0627\\u0644\\u0625\\u064a\\u062c\\u0627\\u0631';
+      var typeFile = inv.type==='deposit' ? 'receipt_deposit' : 'receipt_rent';
+      var nm = (b.name||b.guest_name||'customer').replace(/\\s+/g,'_');
+      var safeDate = (inv.date || new Date().toLocaleDateString('en-GB')).replace(/\\//g,'-');
+      var fileName = typeFile + '_' + nm + '_' + safeDate + '.png';
       
-      raToast('\u062c\u0627\u0631\u064a \u062a\u0648\u0644\u064a\u062f \u0627\u0644\u0625\u064a\u0635\u0627\u0644...', 'info');
+      if(typeof raToast==='function') raToast('\\u062c\\u0627\\u0631\\u064a \\u062a\\u0648\\u0644\\u064a\\u062f \\u0627\\u0644\\u0625\\u064a\\u0635\\u0627\\u0644...', 'info');
       
-      // Create hidden receipt div
-      var receiptDiv = document.createElement('div');
-      receiptDiv.style.cssText = 'position:fixed;left:-9999px;top:0;width:560px;background:#fff;padding:30px;font-family:Tajawal,Arial,sans-serif;direction:rtl;';
-      receiptDiv.innerHTML = '<div style="text-align:center;margin-bottom:24px;">' +
-        '<img src="https://files.manuscdn.com/user_upload_by_module/session_file/310519663530851339/roNCVxbVgYKQtCRp.png" style="max-width:120px;margin-bottom:8px;" crossorigin="anonymous" />' +
-        '<h2 style="margin:0;font-size:22px;color:#1B4332;">' + typeName + '</h2>' +
-        '<p style="margin:4px 0 0;color:#888;font-size:13px;">\u0634\u0627\u0644\u064a\u0647 \u0631\u064a\u062a\u0631\u064a\u062a - \u0627\u0644\u062e\u064a\u0631\u0627\u0646\u060c \u0627\u0644\u0645\u0631\u062d\u0644\u0629 \u0627\u0644\u062e\u0627\u0645\u0633\u0629\u060c \u0634\u0627\u0644\u064a\u0647 \u0631\u0642\u0645 3423</p>' +
-        '</div>' +
-        '<table style="width:100%;border-collapse:collapse;margin-bottom:20px;">' +
-        '<tr style="border-bottom:1px solid #eee;"><td style="padding:10px;text-align:right;font-weight:bold;color:#1B4332;width:40%;">\u0631\u0642\u0645 \u0627\u0644\u0625\u064a\u0635\u0627\u0644</td><td style="padding:10px;text-align:left;">' + (inv.number || '') + '</td></tr>' +
-        '<tr style="border-bottom:1px solid #eee;"><td style="padding:10px;text-align:right;font-weight:bold;color:#1B4332;">\u062a\u0627\u0631\u064a\u062e \u0627\u0644\u0625\u064a\u0635\u0627\u0644</td><td style="padding:10px;text-align:left;">' + (inv.date || '') + '</td></tr>' +
-        '<tr style="border-bottom:1px solid #eee;"><td style="padding:10px;text-align:right;font-weight:bold;color:#1B4332;">\u0646\u0648\u0639 \u0627\u0644\u0625\u064a\u0635\u0627\u0644</td><td style="padding:10px;text-align:left;">' + typeName + '</td></tr>' +
-        '<tr style="border-bottom:1px solid #eee;"><td style="padding:10px;text-align:right;font-weight:bold;color:#1B4332;">\u0627\u0644\u0627\u0633\u0645</td><td style="padding:10px;text-align:left;">' + (b.name || '') + '</td></tr>' +
-        '<tr style="border-bottom:1px solid #eee;"><td style="padding:10px;text-align:right;font-weight:bold;color:#1B4332;">\u0627\u0644\u0645\u0628\u0644\u063a</td><td style="padding:10px;text-align:left;">' + inv.amount + ' \u062f.\u0643</td></tr>' +
-        '<tr style="border-bottom:1px solid #eee;"><td style="padding:10px;text-align:right;font-weight:bold;color:#1B4332;">\u062a\u0648\u0627\u0631\u064a\u062e \u0627\u0644\u062d\u062c\u0632</td><td style="padding:10px;text-align:left;">' + (b.checkOut || '') + ' \u2192 ' + (b.checkIn || '') + '</td></tr>' +
-        (inv.notes ? '<tr><td style="padding:10px;text-align:right;font-weight:bold;color:#1B4332;">\u0645\u0644\u0627\u062d\u0638\u0627\u062a</td><td style="padding:10px;text-align:left;">' + inv.notes + '</td></tr>' : '') +
-        '</table>' +
-        '<p style="text-align:center;color:#aaa;font-size:12px;">\u0647\u0630\u0627 \u0625\u064a\u0635\u0627\u0644 \u0625\u0644\u0643\u062a\u0631\u0648\u0646\u064a \u0635\u0627\u062f\u0631 \u0645\u0646 \u0646\u0638\u0627\u0645 Retreat</p>';
+      var ci = b.checkIn||b.checkin||'';
+      var co = b.checkOut||b.checkout||'';
+      var logo = 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663530851339/roNCVxbVgYKQtCRp.png';
       
-      document.body.appendChild(receiptDiv);
+      var html = '<div style="direction:rtl;font-family:Tajawal,Arial,sans-serif;background:#f6f3ee;padding:30px;max-width:500px;margin:0 auto;">'
+        +'<div style="text-align:center;margin-bottom:20px;">'
+        +'<img src="'+logo+'" style="max-width:100px;margin-bottom:8px;" crossorigin="anonymous" />'
+        +'<h2 style="margin:0;font-size:20px;color:#1B4332;">'+typeName+'</h2>'
+        +'<p style="margin:4px 0 0;color:#888;font-size:12px;">\\u0634\\u0627\\u0644\\u064a\\u0647 \\u0631\\u064a\\u062a\\u0631\\u064a\\u062a - \\u0627\\u0644\\u062e\\u064a\\u0631\\u0627\\u0646\\u060c \\u0627\\u0644\\u0645\\u0631\\u062d\\u0644\\u0629 \\u0627\\u0644\\u062e\\u0627\\u0645\\u0633\\u0629\\u060c \\u0634\\u0627\\u0644\\u064a\\u0647 \\u0631\\u0642\\u0645 3423</p>'
+        +'</div>'
+        +'<table style="width:100%;border-collapse:collapse;margin-bottom:16px;">'
+        +'<tr style="border-bottom:1px solid #ddd;"><td style="padding:10px;text-align:right;font-weight:bold;color:#1B4332;width:40%;">\\u0631\\u0642\\u0645 \\u0627\\u0644\\u0625\\u064a\\u0635\\u0627\\u0644</td><td style="padding:10px;text-align:left;">'+(inv.number||'')+'</td></tr>'
+        +'<tr style="border-bottom:1px solid #ddd;"><td style="padding:10px;text-align:right;font-weight:bold;color:#1B4332;">\\u062a\\u0627\\u0631\\u064a\\u062e \\u0627\\u0644\\u0625\\u064a\\u0635\\u0627\\u0644</td><td style="padding:10px;text-align:left;">'+(inv.date||'')+'</td></tr>'
+        +'<tr style="border-bottom:1px solid #ddd;"><td style="padding:10px;text-align:right;font-weight:bold;color:#1B4332;">\\u0646\\u0648\\u0639 \\u0627\\u0644\\u0625\\u064a\\u0635\\u0627\\u0644</td><td style="padding:10px;text-align:left;">'+typeName+'</td></tr>'
+        +'<tr style="border-bottom:1px solid #ddd;"><td style="padding:10px;text-align:right;font-weight:bold;color:#1B4332;">\\u0627\\u0644\\u0627\\u0633\\u0645</td><td style="padding:10px;text-align:left;">'+(b.name||b.guest_name||'')+'</td></tr>'
+        +'<tr style="border-bottom:1px solid #ddd;"><td style="padding:10px;text-align:right;font-weight:bold;color:#1B4332;">\\u0627\\u0644\\u0645\\u0628\\u0644\\u063a</td><td style="padding:10px;text-align:left;">'+inv.amount+' \\u062f.\\u0643</td></tr>'
+        +'<tr style="border-bottom:1px solid #ddd;"><td style="padding:10px;text-align:right;font-weight:bold;color:#1B4332;">\\u062a\\u0648\\u0627\\u0631\\u064a\\u062e \\u0627\\u0644\\u062d\\u062c\\u0632</td><td style="padding:10px;text-align:left;">'+co+' \\u2192 '+ci+'</td></tr>'
+        +(inv.notes ? '<tr><td style="padding:10px;text-align:right;font-weight:bold;color:#1B4332;">\\u0645\\u0644\\u0627\\u062d\\u0638\\u0627\\u062a</td><td style="padding:10px;text-align:left;">'+inv.notes+'</td></tr>' : '')
+        +'</table>'
+        +'<p style="text-align:center;color:#aaa;font-size:11px;">\\u0647\\u0630\\u0627 \\u0625\\u064a\\u0635\\u0627\\u0644 \\u0625\\u0644\\u0643\\u062a\\u0631\\u0648\\u0646\\u064a \\u0635\\u0627\\u062f\\u0631 \\u0645\\u0646 \\u0646\\u0638\\u0627\\u0645 Retreat</p>'
+        +'</div>';
       
-      // Wait for image to load
-      var img = receiptDiv.querySelector('img');
-      function doCapture() {
-        // Load html2canvas if needed
+      var container = document.createElement('div');
+      container.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:500px;background:#f6f3ee;z-index:-1;';
+      container.innerHTML = html;
+      document.body.appendChild(container);
+      
+      // Wait for logo to load
+      var img = container.querySelector('img');
+      function doRender() {
         if (typeof html2canvas === 'undefined') {
-          var s = document.createElement('script');
-          s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
-          s.onload = function() { captureAndUpload(); };
-          s.onerror = function() {
-            // Try alternative CDN
-            var s2 = document.createElement('script');
-            s2.src = 'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
-            s2.onload = function() { captureAndUpload(); };
-            s2.onerror = function() { 
-              raToast('\u274c \u0641\u0634\u0644 \u062a\u062d\u0645\u064a\u0644 \u0645\u0643\u062a\u0628\u0629 \u0627\u0644\u062a\u0635\u0648\u064a\u0631', 'error');
-              document.body.removeChild(receiptDiv);
+          // Load html2canvas from our server
+          var sc = document.createElement('script');
+          sc.src = 'https://retreat-file-server.onrender.com/html2canvas.min.js';
+          sc.onload = function() { doCapture(); };
+          sc.onerror = function() {
+            // Try jsdelivr as fallback
+            var sc2 = document.createElement('script');
+            sc2.src = 'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
+            sc2.onload = function() { doCapture(); };
+            sc2.onerror = function() {
+              if(typeof raToast==='function') raToast('\\u274c \\u0641\\u0634\\u0644 \\u062a\\u062d\\u0645\\u064a\\u0644 \\u0645\\u0643\\u062a\\u0628\\u0629 \\u0627\\u0644\\u062a\\u0635\\u0648\\u064a\\u0631', 'error');
+              document.body.removeChild(container);
             };
-            document.head.appendChild(s2);
+            document.head.appendChild(sc2);
           };
-          document.head.appendChild(s);
+          document.head.appendChild(sc);
         } else {
-          captureAndUpload();
-        }
-        
-        function captureAndUpload() {
-          html2canvas(receiptDiv, { scale: 2, useCORS: true, backgroundColor: '#ffffff' }).then(function(canvas) {
-            document.body.removeChild(receiptDiv);
-            
-            // Download as PNG
-            canvas.toBlob(function(blob) {
-              if (!blob) { raToast('\u274c \u0641\u0634\u0644 \u062a\u0648\u0644\u064a\u062f \u0627\u0644\u0625\u064a\u0635\u0627\u0644', 'error'); return; }
-              
-              // Download
-              var url = URL.createObjectURL(blob);
-              var a = document.createElement('a');
-              a.href = url;
-              a.download = fileName;
-              document.body.appendChild(a);
-              a.click();
-              document.body.removeChild(a);
-              setTimeout(function(){ URL.revokeObjectURL(url); }, 5000);
-              
-              raToast('\u2705 \u062a\u0645 \u062a\u062d\u0645\u064a\u0644 \u0627\u0644\u0625\u064a\u0635\u0627\u0644', 'success');
-              
-              // Upload as attachment
-              var formData = new FormData();
-              formData.append('files', blob, fileName);
-              
-              fetch(SERVER + '/upload-attachment/' + bookingId, {
-                method: 'POST',
-                body: formData
-              }).then(function(res) { return res.json(); })
-              .then(function(data) {
-                if (data.success) {
-                  console.log('[Receipt] PNG uploaded as attachment', fileName);
-                  raToast('\ud83d\udcce \u062a\u0645 \u062d\u0641\u0638 \u0627\u0644\u0625\u064a\u0635\u0627\u0644 \u0641\u064a \u0627\u0644\u0645\u0631\u0641\u0642\u0627\u062a', 'success');
-                }
-              }).catch(function(err) {
-                console.error('[Receipt] Upload error:', err);
-              });
-            }, 'image/png');
-          }).catch(function(err) {
-            document.body.removeChild(receiptDiv);
-            raToast('\u274c \u0641\u0634\u0644 \u062a\u0648\u0644\u064a\u062f \u0627\u0644\u0625\u064a\u0635\u0627\u0644: ' + err.message, 'error');
-          });
+          doCapture();
         }
       }
       
+      function doCapture() {
+        html2canvas(container, { scale: 2, useCORS: true, backgroundColor: '#f6f3ee', logging: false }).then(function(canvas) {
+          document.body.removeChild(container);
+          canvas.toBlob(function(blob) {
+            if (!blob) { if(typeof raToast==='function') raToast('\\u274c \\u0641\\u0634\\u0644 \\u062a\\u0648\\u0644\\u064a\\u062f \\u0627\\u0644\\u0625\\u064a\\u0635\\u0627\\u0644', 'error'); return; }
+            
+            // Download
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            a.href = url; a.download = fileName;
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            setTimeout(function(){ URL.revokeObjectURL(url); }, 5000);
+            
+            if(typeof raToast==='function') raToast('\\u2705 \\u062a\\u0645 \\u062a\\u062d\\u0645\\u064a\\u0644 \\u0627\\u0644\\u0625\\u064a\\u0635\\u0627\\u0644', 'success');
+            
+            // Upload as attachment
+            var SERVER = (typeof window.SERVER !== 'undefined') ? window.SERVER : 'https://retreat-file-server.onrender.com';
+            var formData = new FormData();
+            formData.append('files', blob, fileName);
+            
+            fetch(SERVER + '/upload-attachment/' + bookingId, {
+              method: 'POST',
+              body: formData
+            }).then(function(r) { return r.json(); })
+            .then(function(data) {
+              if (data.success) {
+                console.log('[Receipt] PNG uploaded as attachment:', fileName);
+                if(typeof raToast==='function') raToast('\\ud83d\\udcce \\u062a\\u0645 \\u062d\\u0641\\u0638 \\u0627\\u0644\\u0625\\u064a\\u0635\\u0627\\u0644 \\u0641\\u064a \\u0627\\u0644\\u0645\\u0631\\u0641\\u0642\\u0627\\u062a', 'success');
+              }
+            }).catch(function(err) {
+              console.error('[Receipt] Upload error:', err);
+            });
+          }, 'image/png');
+        }).catch(function(err) {
+          if(typeof raToast==='function') raToast('\\u274c \\u0641\\u0634\\u0644: ' + err.message, 'error');
+          console.error('[Receipt] html2canvas error:', err);
+          document.body.removeChild(container);
+        });
+      }
+      
       if (img && !img.complete) {
-        img.onload = doCapture;
-        img.onerror = doCapture;
-        setTimeout(doCapture, 3000);
+        img.onload = doRender;
+        img.onerror = doRender;
+        setTimeout(doRender, 3000);
       } else {
-        setTimeout(doCapture, 200);
+        setTimeout(doRender, 200);
       }
     };
     
     window.raGenerateReceiptPDF._pngOverride = true;
     console.log('[Receipt Override] PNG override applied successfully!');
-  }
-  
-  // Start polling - check every 500ms
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', function() {
-      setTimeout(applyOverride, 1000);
-    });
-  } else {
-    setTimeout(applyOverride, 1000);
-  }
+  }, 500);
 })();
-`);
+`;
+  
+  res.send(js);
 });
             document.body.removeChild(container);
           },'image/png');
