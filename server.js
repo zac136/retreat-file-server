@@ -1975,6 +1975,42 @@ app.post('/save-invoices', async (req, res) => {
 
 const PORT = process.env.PORT || 3001;
 
+// ─── Upload Civil ID manually ──────────────────────────────────────────────
+app.post('/upload-civil-id/:bookingId', upload.single('file'), async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: 'No file provided' });
+    
+    console.log(`[upload-civil-id] Uploading civil ID for booking ${bookingId}, size: ${file.size}`);
+    
+    // Convert to base64 data URL
+    const base64 = file.buffer.toString('base64');
+    const dataUrl = `data:${file.mimetype};base64,${base64}`;
+    
+    // Save to civil_id_images metafield
+    const imagesMap = await getCivilIdImages();
+    imagesMap[bookingId] = dataUrl;
+    await setCivilIdImages(imagesMap);
+    
+    // Also update the booking's civilIdImageUrl to STORED_IN_IMAGES
+    const { data, metafieldId } = await getBookingsData();
+    const bookings = data.bookings || [];
+    const idx = bookings.findIndex(b => String(b.id) === String(bookingId));
+    if (idx !== -1) {
+      bookings[idx].civilIdImageUrl = 'STORED_IN_IMAGES';
+      data.bookings = bookings;
+      await setBookingsData(data, metafieldId);
+    }
+    
+    console.log(`[upload-civil-id] Successfully saved civil ID for booking ${bookingId}`);
+    res.json({ success: true, message: 'Civil ID uploaded successfully' });
+  } catch (error) {
+    console.error('[upload-civil-id] Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Serve receipt override JS
 // Serve html2canvas from our server to bypass Shopify CSP
 app.get('/html2canvas.min.js', (req, res) => {
@@ -1992,16 +2028,14 @@ app.get('/receipt-override.js', (req, res) => {
   
   const js = `
 (function() {
-  // Wait only for raGenerateReceiptPDF to be defined
+  var SERVER = 'https://retreat-file-server.onrender.com';
+  
+  // ========== PART 1: Receipt PDF Override ==========
   var _checkInterval = setInterval(function() {
     if (typeof window.raGenerateReceiptPDF !== 'function') return;
     clearInterval(_checkInterval);
-    
-    // Check if already overridden by us
     if (window.raGenerateReceiptPDF._pngOverride) return;
     
-    // Always apply override because original function does not load html2canvas dynamically
-    // Even if original uses toBlob, it lacks the script-loading fallback
     console.log('[Receipt Override] Applying PNG override (with html2canvas loader)...');
     
     window.raGenerateReceiptPDF = function(bookingId, invoiceIdx) {
@@ -2047,16 +2081,13 @@ app.get('/receipt-override.js', (req, res) => {
       container.innerHTML = html;
       document.body.appendChild(container);
       
-      // Wait for logo to load
       var img = container.querySelector('img');
       function doRender() {
         if (typeof html2canvas === 'undefined') {
-          // Load html2canvas from our server
           var sc = document.createElement('script');
-          sc.src = 'https://retreat-file-server.onrender.com/html2canvas.min.js';
+          sc.src = SERVER + '/html2canvas.min.js';
           sc.onload = function() { doCapture(); };
           sc.onerror = function() {
-            // Try jsdelivr as fallback
             var sc2 = document.createElement('script');
             sc2.src = 'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
             sc2.onload = function() { doCapture(); };
@@ -2077,21 +2108,14 @@ app.get('/receipt-override.js', (req, res) => {
           document.body.removeChild(container);
           canvas.toBlob(function(blob) {
             if (!blob) { if(typeof raToast==='function') raToast('\\u274c \\u0641\\u0634\\u0644 \\u062a\\u0648\\u0644\\u064a\\u062f \\u0627\\u0644\\u0625\\u064a\\u0635\\u0627\\u0644', 'error'); return; }
-            
-            // Download
             var url = URL.createObjectURL(blob);
             var a = document.createElement('a');
             a.href = url; a.download = fileName;
             document.body.appendChild(a); a.click(); document.body.removeChild(a);
             setTimeout(function(){ URL.revokeObjectURL(url); }, 5000);
-            
             if(typeof raToast==='function') raToast('\\u2705 \\u062a\\u0645 \\u062a\\u062d\\u0645\\u064a\\u0644 \\u0627\\u0644\\u0625\\u064a\\u0635\\u0627\\u0644', 'success');
-            
-            // Upload as attachment
-            var SERVER = (typeof window.SERVER !== 'undefined') ? window.SERVER : 'https://retreat-file-server.onrender.com';
             var formData = new FormData();
             formData.append('files', blob, fileName);
-            
             fetch(SERVER + '/upload-attachment/' + bookingId, {
               method: 'POST',
               body: formData
@@ -2124,6 +2148,311 @@ app.get('/receipt-override.js', (req, res) => {
     window.raGenerateReceiptPDF._pngOverride = true;
     console.log('[Receipt Override] PNG override applied successfully!');
   }, 500);
+  
+  // ========== PART 2: UI Enhancements ==========
+  // Wait for DOM to be ready and booking cards to render
+  var _uiInterval = setInterval(function() {
+    var cards = document.querySelectorAll('[id^="ra-card-"]');
+    if (cards.length === 0) return;
+    clearInterval(_uiInterval);
+    
+    console.log('[UI Override] Enhancing buttons for ' + cards.length + ' booking cards...');
+    
+    // Process each booking card
+    cards.forEach(function(card) {
+      var bookingId = card.id.replace('ra-card-', '');
+      var allBtns = card.querySelectorAll('button.ra-btn');
+      
+      allBtns.forEach(function(btn) {
+        // ---- 1. Rename receipt button and add view receipts button ----
+        if (btn.textContent.trim() === '\\ud83e\\uddc9 \\u0625\\u064a\\u0635\\u0627\\u0644\\u0627\\u062a') {
+          btn.textContent = '\\ud83e\\uddc9 \\u0625\\u0646\\u0634\\u0627\\u0621 \\u0625\\u064a\\u0635\\u0627\\u0644';
+          
+          // Add "view receipts" button after it
+          if (!card.querySelector('.ra-view-receipts-btn')) {
+            var viewBtn = document.createElement('button');
+            viewBtn.className = 'ra-btn ra-view-receipts-btn';
+            viewBtn.style.cssText = 'background:#5a4a3a;color:#fff;margin:2px;padding:6px 10px;border:none;border-radius:6px;cursor:pointer;font-size:0.8rem;font-family:inherit;';
+            viewBtn.textContent = '\\ud83d\\udcca \\u0645\\u0634\\u0627\\u0647\\u062f\\u0629 \\u0627\\u0644\\u0625\\u064a\\u0635\\u0627\\u0644\\u0627\\u062a';
+            viewBtn.onclick = function() { window._raViewReceipts(bookingId); };
+            btn.parentNode.insertBefore(viewBtn, btn.nextSibling);
+          }
+        }
+        
+        // ---- 2. Fix civil ID button - add for ALL bookings ----
+        if (btn.textContent.trim() === '\\ud83e\\udea8 \\u0627\\u0644\\u0628\\u0637\\u0627\\u0642\\u0629 \\u0627\\u0644\\u0645\\u062f\\u0646\\u064a\\u0629') {
+          // Override onclick to use our enhanced version
+          btn.onclick = function() { window._raViewCivilIdEnhanced(bookingId); };
+        }
+      });
+      
+      // Add civil ID button if missing
+      var hasCivilBtn = false;
+      allBtns.forEach(function(b) {
+        if (b.textContent.includes('\\u0627\\u0644\\u0628\\u0637\\u0627\\u0642\\u0629 \\u0627\\u0644\\u0645\\u062f\\u0646\\u064a\\u0629')) hasCivilBtn = true;
+      });
+      if (!hasCivilBtn) {
+        var actionsDiv = card.querySelector('.ra-booking-actions');
+        if (!actionsDiv) {
+          // Find the div containing buttons
+          var btns = card.querySelectorAll('button.ra-btn');
+          if (btns.length > 0) actionsDiv = btns[0].parentNode;
+        }
+        if (actionsDiv) {
+          var civilBtn = document.createElement('button');
+          civilBtn.className = 'ra-btn';
+          civilBtn.style.cssText = 'background:#7a6b5a;color:#fff;margin:2px;padding:6px 10px;border:none;border-radius:6px;cursor:pointer;font-size:0.8rem;font-family:inherit;';
+          civilBtn.textContent = '\\ud83e\\udea8 \\u0627\\u0644\\u0628\\u0637\\u0627\\u0642\\u0629 \\u0627\\u0644\\u0645\\u062f\\u0646\\u064a\\u0629';
+          civilBtn.onclick = function() { window._raViewCivilIdEnhanced(bookingId); };
+          // Insert before the attachments button
+          var attachBtn = null;
+          actionsDiv.querySelectorAll('button').forEach(function(b) {
+            if (b.textContent.includes('\\u0645\\u0631\\u0641\\u0642\\u0627\\u062a')) attachBtn = b;
+          });
+          if (attachBtn) {
+            actionsDiv.insertBefore(civilBtn, attachBtn);
+          } else {
+            actionsDiv.appendChild(civilBtn);
+          }
+        }
+      }
+    });
+    
+    console.log('[UI Override] Button enhancement complete!');
+  }, 1000);
+  
+  // Also observe for new cards added dynamically
+  var _observer = new MutationObserver(function(mutations) {
+    mutations.forEach(function(m) {
+      m.addedNodes.forEach(function(node) {
+        if (node.nodeType === 1 && node.id && node.id.startsWith('ra-card-')) {
+          var bookingId = node.id.replace('ra-card-', '');
+          setTimeout(function() {
+            var allBtns = node.querySelectorAll('button.ra-btn');
+            allBtns.forEach(function(btn) {
+              if (btn.textContent.trim() === '\\ud83e\\uddc9 \\u0625\\u064a\\u0635\\u0627\\u0644\\u0627\\u062a') {
+                btn.textContent = '\\ud83e\\uddc9 \\u0625\\u0646\\u0634\\u0627\\u0621 \\u0625\\u064a\\u0635\\u0627\\u0644';
+                if (!node.querySelector('.ra-view-receipts-btn')) {
+                  var viewBtn = document.createElement('button');
+                  viewBtn.className = 'ra-btn ra-view-receipts-btn';
+                  viewBtn.style.cssText = 'background:#5a4a3a;color:#fff;margin:2px;padding:6px 10px;border:none;border-radius:6px;cursor:pointer;font-size:0.8rem;font-family:inherit;';
+                  viewBtn.textContent = '\\ud83d\\udcca \\u0645\\u0634\\u0627\\u0647\\u062f\\u0629 \\u0627\\u0644\\u0625\\u064a\\u0635\\u0627\\u0644\\u0627\\u062a';
+                  viewBtn.onclick = function() { window._raViewReceipts(bookingId); };
+                  btn.parentNode.insertBefore(viewBtn, btn.nextSibling);
+                }
+              }
+              if (btn.textContent.includes('\\u0627\\u0644\\u0628\\u0637\\u0627\\u0642\\u0629 \\u0627\\u0644\\u0645\\u062f\\u0646\\u064a\\u0629')) {
+                btn.onclick = function() { window._raViewCivilIdEnhanced(bookingId); };
+              }
+            });
+            // Add civil ID button if missing
+            var hasCivil = false;
+            allBtns.forEach(function(b) { if (b.textContent.includes('\\u0627\\u0644\\u0628\\u0637\\u0627\\u0642\\u0629 \\u0627\\u0644\\u0645\\u062f\\u0646\\u064a\\u0629')) hasCivil = true; });
+            if (!hasCivil) {
+              var parent = allBtns.length > 0 ? allBtns[0].parentNode : null;
+              if (parent) {
+                var cb = document.createElement('button');
+                cb.className = 'ra-btn';
+                cb.style.cssText = 'background:#7a6b5a;color:#fff;margin:2px;padding:6px 10px;border:none;border-radius:6px;cursor:pointer;font-size:0.8rem;font-family:inherit;';
+                cb.textContent = '\\ud83e\\udea8 \\u0627\\u0644\\u0628\\u0637\\u0627\\u0642\\u0629 \\u0627\\u0644\\u0645\\u062f\\u0646\\u064a\\u0629';
+                cb.onclick = function() { window._raViewCivilIdEnhanced(bookingId); };
+                parent.appendChild(cb);
+              }
+            }
+          }, 200);
+        }
+      });
+    });
+  });
+  setTimeout(function() {
+    var container = document.getElementById('ra-bookings-container') || document.body;
+    _observer.observe(container, { childList: true, subtree: true });
+  }, 2000);
+  
+  // ========== PART 3: View Receipts Function ==========
+  window._raViewReceipts = function(bookingId) {
+    var store = (typeof getInvoiceStore === 'function') ? getInvoiceStore() : JSON.parse(localStorage.getItem('ra_invoices') || '{}');
+    var invoices = store[bookingId] || [];
+    var b = (typeof allBookings !== 'undefined') ? allBookings.find(function(x){return String(x.id)===String(bookingId);}) : null;
+    var name = b ? (b.name || b.guest_name || '') : bookingId;
+    
+    // Remove existing overlay
+    var existing = document.getElementById('ra-receipts-overlay');
+    if (existing) existing.remove();
+    
+    var overlay = document.createElement('div');
+    overlay.id = 'ra-receipts-overlay';
+    overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px;';
+    overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+    
+    var content = '<div style="background:#fff;border-radius:12px;max-width:550px;width:100%;max-height:90vh;overflow:auto;padding:20px;position:relative;direction:rtl;font-family:Tajawal,Arial,sans-serif;">';
+    content += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">';
+    content += '<h3 style="margin:0;font-size:1.1rem;color:#1B4332;">\\ud83d\\udcca \\u0627\\u0644\\u0625\\u064a\\u0635\\u0627\\u0644\\u0627\\u062a \\u0627\\u0644\\u0635\\u0627\\u062f\\u0631\\u0629 - ' + name + '</h3>';
+    content += '<button onclick="document.getElementById(\\'ra-receipts-overlay\\').remove()" style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:#999;">&times;</button>';
+    content += '</div>';
+    
+    if (invoices.length === 0) {
+      content += '<div style="text-align:center;padding:40px 20px;color:#999;">'
+        + '<p style="font-size:2rem;margin:0;">\\ud83d\\udcc4</p>'
+        + '<p style="margin:8px 0 0;">\\u0644\\u0627 \\u062a\\u0648\\u062c\\u062f \\u0625\\u064a\\u0635\\u0627\\u0644\\u0627\\u062a \\u0635\\u0627\\u062f\\u0631\\u0629 \\u0644\\u0647\\u0630\\u0627 \\u0627\\u0644\\u062d\\u062c\\u0632</p>'
+        + '</div>';
+    } else {
+      invoices.forEach(function(inv, idx) {
+        var typeLabel = inv.type === 'deposit' ? '\\u0639\\u0631\\u0628\\u0648\\u0646' : '\\u0625\\u064a\\u062c\\u0627\\u0631';
+        var typeColor = inv.type === 'deposit' ? '#c9a84c' : '#2d6a4f';
+        var date = inv.date || (inv.createdAt ? new Date(inv.createdAt).toLocaleDateString('en-GB') : '-');
+        content += '<div style="border:1px solid #e8e0d4;border-radius:8px;padding:12px;margin-bottom:10px;background:#faf8f4;">';
+        content += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">';
+        content += '<span style="background:'+typeColor+';color:#fff;padding:3px 10px;border-radius:12px;font-size:0.75rem;">'+typeLabel+'</span>';
+        content += '<span style="color:#888;font-size:0.8rem;">'+date+'</span>';
+        content += '</div>';
+        content += '<div style="display:flex;justify-content:space-between;align-items:center;">';
+        content += '<span style="font-weight:bold;font-size:1.1rem;color:#1B4332;">'+inv.amount+' \\u062f.\\u0643</span>';
+        content += '<button onclick="window.raGenerateReceiptPDF(\\''+bookingId+'\\','+idx+')" style="background:#2d6a4f;color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:0.8rem;">\\ud83d\\udce5 \\u062a\\u062d\\u0645\\u064a\\u0644</button>';
+        content += '</div>';
+        if (inv.notes) {
+          content += '<p style="margin:6px 0 0;color:#888;font-size:0.8rem;">\\ud83d\\udcdd '+inv.notes+'</p>';
+        }
+        if (inv.number) {
+          content += '<p style="margin:4px 0 0;color:#aaa;font-size:0.75rem;">\\u0631\\u0642\\u0645: '+inv.number+'</p>';
+        }
+        content += '</div>';
+      });
+    }
+    
+    content += '</div>';
+    overlay.innerHTML = content;
+    document.body.appendChild(overlay);
+  };
+  
+  // ========== PART 4: Enhanced Civil ID View with Upload ==========
+  window._raViewCivilIdEnhanced = function(bookingId) {
+    var b = (typeof allBookings !== 'undefined') ? allBookings.find(function(x){return String(x.id)===String(bookingId);}) : null;
+    var name = b ? (b.name || b.guest_name || '') : '';
+    
+    // Remove existing overlay
+    var existing = document.getElementById('ra-civilid-overlay');
+    if (existing) existing.remove();
+    
+    var overlay = document.createElement('div');
+    overlay.id = 'ra-civilid-overlay';
+    overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px;';
+    overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+    
+    // Show loading first
+    overlay.innerHTML = '<div style="background:#fff;border-radius:12px;max-width:500px;width:100%;padding:30px;text-align:center;direction:rtl;font-family:Tajawal,Arial,sans-serif;">'
+      + '<p style="font-size:1.2rem;">\\u062c\\u0627\\u0631\\u064a \\u0627\\u0644\\u062a\\u062d\\u0645\\u064a\\u0644...</p>'
+      + '</div>';
+    document.body.appendChild(overlay);
+    
+    // Try to fetch civil ID from server
+    fetch(SERVER + '/get-civil-id/' + bookingId)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.success && data.imageUrl) {
+          showCivilIdContent(overlay, bookingId, name, data.imageUrl);
+        } else {
+          // No image found - show upload form
+          showCivilIdUploadForm(overlay, bookingId, name);
+        }
+      })
+      .catch(function() {
+        // Also check if booking has inline civilIdImageUrl
+        if (b && b.civilIdImageUrl && b.civilIdImageUrl !== 'STORED_IN_IMAGES' && (b.civilIdImageUrl.startsWith('data:') || b.civilIdImageUrl.startsWith('http'))) {
+          showCivilIdContent(overlay, bookingId, name, b.civilIdImageUrl);
+        } else {
+          showCivilIdUploadForm(overlay, bookingId, name);
+        }
+      });
+  };
+  
+  function showCivilIdContent(overlay, bookingId, name, imageUrl) {
+    overlay.innerHTML = '<div style="background:#fff;border-radius:12px;max-width:500px;width:100%;max-height:90vh;overflow:auto;padding:16px;position:relative;direction:rtl;font-family:Tajawal,Arial,sans-serif;">'
+      + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
+      + '<h3 style="margin:0;font-size:1rem;color:#3d3d3d;">\\ud83e\\udea8 \\u0627\\u0644\\u0628\\u0637\\u0627\\u0642\\u0629 \\u0627\\u0644\\u0645\\u062f\\u0646\\u064a\\u0629 - ' + name + '</h3>'
+      + '<button onclick="document.getElementById(\\'ra-civilid-overlay\\').remove()" style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:#999;">&times;</button>'
+      + '</div>'
+      + '<img src="' + imageUrl + '" alt="\\u0628\\u0637\\u0627\\u0642\\u0629 \\u0645\\u062f\\u0646\\u064a\\u0629" style="width:100%;border-radius:8px;border:2px solid #c9a961;object-fit:contain;display:block;background:#f5f0e8;" />'
+      + '<div style="display:flex;gap:8px;margin-top:10px;">'
+      + '<a href="' + imageUrl + '" download="civil-id-' + bookingId + '.jpg" style="flex:1;display:block;padding:10px;background:#c9a961;color:#fff;border-radius:6px;font-size:0.85rem;font-weight:600;text-align:center;text-decoration:none;">\\ud83d\\udcf7 \\u062a\\u062d\\u0645\\u064a\\u0644 \\u0627\\u0644\\u0635\\u0648\\u0631\\u0629</a>'
+      + '<button onclick="window._raReplaceCivilId(\\''+bookingId+'\\',\\''+name+'\\')" style="flex:1;padding:10px;background:#7a6b5a;color:#fff;border:none;border-radius:6px;font-size:0.85rem;font-weight:600;cursor:pointer;">\\ud83d\\udd04 \\u062a\\u063a\\u064a\\u064a\\u0631 \\u0627\\u0644\\u0635\\u0648\\u0631\\u0629</button>'
+      + '</div>'
+      + '</div>';
+  }
+  
+  function showCivilIdUploadForm(overlay, bookingId, name) {
+    overlay.innerHTML = '<div style="background:#fff;border-radius:12px;max-width:500px;width:100%;padding:20px;position:relative;direction:rtl;font-family:Tajawal,Arial,sans-serif;">'
+      + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">'
+      + '<h3 style="margin:0;font-size:1rem;color:#3d3d3d;">\\ud83e\\udea8 \\u0627\\u0644\\u0628\\u0637\\u0627\\u0642\\u0629 \\u0627\\u0644\\u0645\\u062f\\u0646\\u064a\\u0629 - ' + name + '</h3>'
+      + '<button onclick="document.getElementById(\\'ra-civilid-overlay\\').remove()" style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:#999;">&times;</button>'
+      + '</div>'
+      + '<div style="text-align:center;padding:30px;border:2px dashed #c9a961;border-radius:8px;background:#faf8f4;margin-bottom:12px;">'
+      + '<p style="font-size:2.5rem;margin:0;">\\ud83d\\udcf7</p>'
+      + '<p style="margin:8px 0;color:#666;">\\u0644\\u0627 \\u062a\\u0648\\u062c\\u062f \\u0635\\u0648\\u0631\\u0629 \\u0644\\u0644\\u0628\\u0637\\u0627\\u0642\\u0629 \\u0627\\u0644\\u0645\\u062f\\u0646\\u064a\\u0629</p>'
+      + '<p style="margin:4px 0;color:#999;font-size:0.85rem;">\\u0627\\u062e\\u062a\\u0631 \\u0635\\u0648\\u0631\\u0629 \\u0644\\u0631\\u0641\\u0639\\u0647\\u0627</p>'
+      + '<div id="ra-civil-preview" style="margin-top:10px;"></div>'
+      + '</div>'
+      + '<input type="file" id="ra-civil-upload-input" accept="image/*" style="display:none;" onchange="window._raCivilIdPreview(this)" />'
+      + '<div style="display:flex;gap:8px;">'
+      + '<button onclick="document.getElementById(\\'ra-civil-upload-input\\').click()" style="flex:1;padding:10px;background:#c9a961;color:#fff;border:none;border-radius:6px;font-size:0.85rem;font-weight:600;cursor:pointer;">\\ud83d\\udcc2 \\u0627\\u062e\\u062a\\u064a\\u0627\\u0631 \\u0635\\u0648\\u0631\\u0629</button>'
+      + '<button id="ra-civil-upload-btn" onclick="window._raUploadCivilId(\\''+bookingId+'\\')" style="flex:1;padding:10px;background:#2d6a4f;color:#fff;border:none;border-radius:6px;font-size:0.85rem;font-weight:600;cursor:pointer;opacity:0.5;" disabled>\\u2b06\\ufe0f \\u0631\\u0641\\u0639</button>'
+      + '</div>'
+      + '</div>';
+  }
+  
+  window._raCivilIdPreview = function(input) {
+    var preview = document.getElementById('ra-civil-preview');
+    var uploadBtn = document.getElementById('ra-civil-upload-btn');
+    if (input.files && input.files[0]) {
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        preview.innerHTML = '<img src="'+e.target.result+'" style="max-width:100%;max-height:200px;border-radius:6px;border:1px solid #ddd;" />';
+        uploadBtn.disabled = false;
+        uploadBtn.style.opacity = '1';
+      };
+      reader.readAsDataURL(input.files[0]);
+    }
+  };
+  
+  window._raUploadCivilId = function(bookingId) {
+    var input = document.getElementById('ra-civil-upload-input');
+    if (!input.files || !input.files[0]) return;
+    
+    var uploadBtn = document.getElementById('ra-civil-upload-btn');
+    uploadBtn.textContent = '\\u062c\\u0627\\u0631\\u064a \\u0627\\u0644\\u0631\\u0641\\u0639...';
+    uploadBtn.disabled = true;
+    
+    var formData = new FormData();
+    formData.append('file', input.files[0]);
+    
+    fetch(SERVER + '/upload-civil-id/' + bookingId, {
+      method: 'POST',
+      body: formData
+    }).then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.success) {
+        if(typeof raToast==='function') raToast('\\u2705 \\u062a\\u0645 \\u0631\\u0641\\u0639 \\u0627\\u0644\\u0628\\u0637\\u0627\\u0642\\u0629 \\u0627\\u0644\\u0645\\u062f\\u0646\\u064a\\u0629 \\u0628\\u0646\\u062c\\u0627\\u062d', 'success');
+        document.getElementById('ra-civilid-overlay').remove();
+        // Re-open to show the uploaded image
+        setTimeout(function() { window._raViewCivilIdEnhanced(bookingId); }, 500);
+      } else {
+        if(typeof raToast==='function') raToast('\\u274c \\u0641\\u0634\\u0644 \\u0627\\u0644\\u0631\\u0641\\u0639: ' + (data.error || ''), 'error');
+        uploadBtn.textContent = '\\u2b06\\ufe0f \\u0631\\u0641\\u0639';
+        uploadBtn.disabled = false;
+      }
+    }).catch(function(err) {
+      if(typeof raToast==='function') raToast('\\u274c \\u062e\\u0637\\u0623: ' + err.message, 'error');
+      uploadBtn.textContent = '\\u2b06\\ufe0f \\u0631\\u0641\\u0639';
+      uploadBtn.disabled = false;
+    });
+  };
+  
+  window._raReplaceCivilId = function(bookingId, name) {
+    var overlay = document.getElementById('ra-civilid-overlay');
+    if (overlay) showCivilIdUploadForm(overlay, bookingId, name);
+  };
+  
+  console.log('[Receipt Override] All enhancements loaded.');
 })();
 `;
   
