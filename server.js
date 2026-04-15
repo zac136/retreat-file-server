@@ -1979,14 +1979,19 @@ const PORT = process.env.PORT || 3001;
 app.post('/upload-civil-id/:bookingId', upload.single('file'), async (req, res) => {
   try {
     const { bookingId } = req.params;
-    const file = req.file;
-    if (!file) return res.status(400).json({ error: 'No file provided' });
+    let dataUrl;
     
-    console.log(`[upload-civil-id] Uploading civil ID for booking ${bookingId}, size: ${file.size}`);
-    
-    // Convert to base64 data URL
-    const base64 = file.buffer.toString('base64');
-    const dataUrl = `data:${file.mimetype};base64,${base64}`;
+    // Support both multipart file upload and JSON base64
+    if (req.file) {
+      const base64 = req.file.buffer.toString('base64');
+      dataUrl = `data:${req.file.mimetype};base64,${base64}`;
+      console.log(`[upload-civil-id] Uploading civil ID for booking ${bookingId} via file, size: ${req.file.size}`);
+    } else if (req.body && req.body.imageData) {
+      dataUrl = req.body.imageData;
+      console.log(`[upload-civil-id] Uploading civil ID for booking ${bookingId} via JSON base64, length: ${dataUrl.length}`);
+    } else {
+      return res.status(400).json({ error: 'No file provided' });
+    }
     
     // Save to civil_id_images metafield
     const imagesMap = await getCivilIdImages();
