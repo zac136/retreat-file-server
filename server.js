@@ -1760,13 +1760,13 @@ async function uploadToShopifyCDN(fileBuffer, filename, mimetype) {
   }
 
   // Get the URL - might need to poll for processing
-  let fileUrl = createdFile.url || createdFile.image?.url || target.resourceUrl;
+  let fileUrl = createdFile.url || createdFile.image?.url;
   
-  // Poll for file URL if not immediately available
-  if (!fileUrl || fileUrl === '') {
-    const fileId = createdFile.id;
-    for (let i = 0; i < 10; i++) {
-      await new Promise(r => setTimeout(r, 1000));
+  // Poll for CDN URL if not immediately available (staged URLs are temporary)
+  const fileId = createdFile.id;
+  if (!fileUrl || fileUrl.includes('staged-uploads')) {
+    for (let i = 0; i < 15; i++) {
+      await new Promise(r => setTimeout(r, 2000));
       const checkResult = await shopifyGraphQL(`
         query($id: ID!) {
           node(id: $id) {
@@ -1779,11 +1779,16 @@ async function uploadToShopifyCDN(fileBuffer, filename, mimetype) {
           }
         }
       `, { id: fileId });
-      fileUrl = checkResult?.node?.url || checkResult?.node?.image?.url;
-      if (fileUrl) break;
+      const polledUrl = checkResult?.node?.url || checkResult?.node?.image?.url;
+      if (polledUrl && !polledUrl.includes('staged-uploads')) {
+        fileUrl = polledUrl;
+        break;
+      }
+      if (polledUrl && !fileUrl) fileUrl = polledUrl;
     }
   }
 
+  console.log(`[uploadToShopifyCDN] Final URL: ${fileUrl}`);
   return fileUrl || target.resourceUrl;
 }
 
