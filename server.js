@@ -2165,7 +2165,7 @@ app.get('/receipt-override.js', (req, res) => {
       
       allBtns.forEach(function(btn) {
         // ---- 1. Rename receipt button and add view receipts button ----
-        if (btn.textContent.includes('\\u0625\\u064a\\u0635\\u0627\\u0644\\u0627\\u062a') && !btn.textContent.includes('\\u0625\\u0646\\u0634\\u0627\\u0621')) {
+        if (btn.textContent.includes('\\u0625\\u064a\\u0635\\u0627\\u0644\\u0627\\u062a') && !btn.textContent.includes('\\u0625\\u0646\\u0634\\u0627\\u0621') && !btn.classList.contains('ra-view-receipts-btn')) {
           btn.textContent = '\\ud83e\\uddfe \\u0625\\u0646\\u0634\\u0627\\u0621 \\u0625\\u064a\\u0635\\u0627\\u0644';
           
           // Add "view receipts" button after it
@@ -2202,7 +2202,7 @@ app.get('/receipt-override.js', (req, res) => {
           var civilBtn = document.createElement('button');
           civilBtn.className = 'ra-btn';
           civilBtn.style.cssText = 'background:#7a6b5a;color:#fff;margin:2px;padding:6px 10px;border:none;border-radius:6px;cursor:pointer;font-size:0.8rem;font-family:inherit;';
-          civilBtn.textContent = '\\ud83e\\udea8 \\u0627\\u0644\\u0628\\u0637\\u0627\\u0642\\u0629 \\u0627\\u0644\\u0645\\u062f\\u0646\\u064a\\u0629';
+          civilBtn.textContent = '\\ud83e\\udeaa \\u0627\\u0644\\u0628\\u0637\\u0627\\u0642\\u0629 \\u0627\\u0644\\u0645\\u062f\\u0646\\u064a\\u0629';
           civilBtn.onclick = function() { window._raViewCivilIdEnhanced(bookingId); };
           // Insert before the attachments button
           var attachBtn = null;
@@ -2230,7 +2230,7 @@ app.get('/receipt-override.js', (req, res) => {
           setTimeout(function() {
             var allBtns = node.querySelectorAll('button.ra-btn');
             allBtns.forEach(function(btn) {
-              if (btn.textContent.includes('\\u0625\\u064a\\u0635\\u0627\\u0644\\u0627\\u062a') && !btn.textContent.includes('\\u0625\\u0646\\u0634\\u0627\\u0621')) {
+              if (btn.textContent.includes('\\u0625\\u064a\\u0635\\u0627\\u0644\\u0627\\u062a') && !btn.textContent.includes('\\u0625\\u0646\\u0634\\u0627\\u0621') && !btn.classList.contains('ra-view-receipts-btn')) {
                 btn.textContent = '\\ud83e\\uddfe \\u0625\\u0646\\u0634\\u0627\\u0621 \\u0625\\u064a\\u0635\\u0627\\u0644';
                 if (!node.querySelector('.ra-view-receipts-btn')) {
                   var viewBtn = document.createElement('button');
@@ -2254,7 +2254,7 @@ app.get('/receipt-override.js', (req, res) => {
                 var cb = document.createElement('button');
                 cb.className = 'ra-btn';
                 cb.style.cssText = 'background:#7a6b5a;color:#fff;margin:2px;padding:6px 10px;border:none;border-radius:6px;cursor:pointer;font-size:0.8rem;font-family:inherit;';
-                cb.textContent = '\\ud83e\\udea8 \\u0627\\u0644\\u0628\\u0637\\u0627\\u0642\\u0629 \\u0627\\u0644\\u0645\\u062f\\u0646\\u064a\\u0629';
+                cb.textContent = '\\ud83e\\udeaa \\u0627\\u0644\\u0628\\u0637\\u0627\\u0642\\u0629 \\u0627\\u0644\\u0645\\u062f\\u0646\\u064a\\u0629';
                 cb.onclick = function() { window._raViewCivilIdEnhanced(bookingId); };
                 parent.appendChild(cb);
               }
@@ -2369,7 +2369,7 @@ app.get('/receipt-override.js', (req, res) => {
   function showCivilIdContent(overlay, bookingId, name, imageUrl) {
     overlay.innerHTML = '<div style="background:#fff;border-radius:12px;max-width:500px;width:100%;max-height:90vh;overflow:auto;padding:16px;position:relative;direction:rtl;font-family:Tajawal,Arial,sans-serif;">'
       + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
-      + '<h3 style="margin:0;font-size:1rem;color:#3d3d3d;">\\ud83e\\udea8 \\u0627\\u0644\\u0628\\u0637\\u0627\\u0642\\u0629 \\u0627\\u0644\\u0645\\u062f\\u0646\\u064a\\u0629 - ' + name + '</h3>'
+      + '<h3 style="margin:0;font-size:1rem;color:#3d3d3d;">\\ud83e\\udeaa \\u0627\\u0644\\u0628\\u0637\\u0627\\u0642\\u0629 \\u0627\\u0644\\u0645\\u062f\\u0646\\u064a\\u0629 - ' + name + '</h3>'
       + '<button onclick="document.getElementById(\\'ra-civilid-overlay\\').remove()" style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:#999;">&times;</button>'
       + '</div>'
       + '<img src="' + imageUrl + '" alt="\\u0628\\u0637\\u0627\\u0642\\u0629 \\u0645\\u062f\\u0646\\u064a\\u0629" style="width:100%;border-radius:8px;border:2px solid #c9a961;object-fit:contain;display:block;background:#f5f0e8;" />'
@@ -2383,7 +2383,7 @@ app.get('/receipt-override.js', (req, res) => {
   function showCivilIdUploadForm(overlay, bookingId, name) {
     overlay.innerHTML = '<div style="background:#fff;border-radius:12px;max-width:500px;width:100%;padding:20px;position:relative;direction:rtl;font-family:Tajawal,Arial,sans-serif;">'
       + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">'
-      + '<h3 style="margin:0;font-size:1rem;color:#3d3d3d;">\\ud83e\\udea8 \\u0627\\u0644\\u0628\\u0637\\u0627\\u0642\\u0629 \\u0627\\u0644\\u0645\\u062f\\u0646\\u064a\\u0629 - ' + name + '</h3>'
+      + '<h3 style="margin:0;font-size:1rem;color:#3d3d3d;">\\ud83e\\udeaa \\u0627\\u0644\\u0628\\u0637\\u0627\\u0642\\u0629 \\u0627\\u0644\\u0645\\u062f\\u0646\\u064a\\u0629 - ' + name + '</h3>'
       + '<button onclick="document.getElementById(\\'ra-civilid-overlay\\').remove()" style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:#999;">&times;</button>'
       + '</div>'
       + '<div style="text-align:center;padding:30px;border:2px dashed #c9a961;border-radius:8px;background:#faf8f4;margin-bottom:12px;">'
