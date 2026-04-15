@@ -4,6 +4,7 @@ const cors = require('cors');
 const fetch = require('node-fetch');
 const { URLSearchParams } = require('url');
 const crypto = require('crypto');
+const FormData = require('form-data');
 const puppeteer = require('puppeteer');
 
 const app = express();
@@ -1621,37 +1622,193 @@ async function setAttachments(attMap) {
   });
 }
 
-// Upload attachment for a booking
-app.post('/upload-attachment/:bookingId', upload.single('file'), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: 'No file provided' });
-    const bookingId = req.params.bookingId;
-    const file = req.file;
-    const filename = (req.body.filename || file.originalname || 'attachment').replace(/[/\\]/g, '_');
-    console.log(`Uploading attachment for booking ${bookingId}: ${filename} (${file.size} bytes)`);
+// ─── Upload file to Shopify via Staged Uploads ─────────────────────────────
+async function uploadToShopifyCDN(fileBuffer, filename, mimetype) {
+  // Step 1: Create staged upload target
+  const stagedResult = await shopifyGraphQL(`
+    mutation stagedUploadsCreate($input: [StagedUploadInput!]!) {
+      stagedUploadsCreate(input: $input) {
+        stagedTargets {
+          url
+          resourceUrl
+          parameters {
+            name
+            value
+          }
+        }
+        userErrors {
+          field
+          message
+        }
+      }
+    }
+  `, {
+    input: [{
+      resource: "FILE",
+      filename: filename,
+      mimeType: mimetype,
+      httpMethod: "POST",
+      fileSize: String(fileBuffer.length)
+    }]
+  });
 
-    const base64 = file.buffer.toString('base64');
-    const dataUrl = `data:${file.mimetype};base64,${base64}`;
+  const target = stagedResult?.stagedUploadsCreate?.stagedTargets?.[0];
+  if (!target) {
+    const errors = stagedResult?.stagedUploadsCreate?.userErrors;
+    throw new Error('Failed to create staged upload: ' + JSON.stringify(errors));
+  }
+
+  // Step 2: Upload file to staged URL
+  const formData = new FormData();
+  for (const param of target.parameters) {
+    formData.append(param.name, param.value);
+  }
+  formData.append('file', fileBuffer, { filename, contentType: mimetype });
+
+  const uploadResp = await fetch(target.url, {
+    method: 'POST',
+    body: formData,
+    headers: formData.getHeaders()
+  });
+
+  if (!uploadResp.ok) {
+    throw new Error(`Staged upload failed: ${uploadResp.status}`);
+  }
+
+  // Step 3: Create file in Shopify
+  const fileResult = await shopifyGraphQL(`
+    mutation fileCreate($files: [FileCreateInput!]!) {
+      fileCreate(files: $files) {
+        files {
+          id
+          alt
+          ... on GenericFile {
+            url
+          }
+          ... on MediaImage {
+            image {
+              url
+            }
+          }
+        }
+        userErrors {
+          field
+          message
+        }
+      }
+    }
+  `, {
+    files: [{
+      alt: filename,
+      contentType: mimetype.startsWith('image/') ? "IMAGE" : "FILE",
+      originalSource: target.resourceUrl
+    }]
+  });
+
+  const createdFile = fileResult?.fileCreate?.files?.[0];
+  if (!createdFile) {
+    const errors = fileResult?.fileCreate?.userErrors;
+    throw new Error('Failed to create file: ' + JSON.stringify(errors));
+  }
+
+  // Get the URL - might need to poll for processing
+  let fileUrl = createdFile.url || createdFile.image?.url || target.resourceUrl;
+  
+  // Poll for file URL if not immediately available
+  if (!fileUrl || fileUrl === '') {
+    const fileId = createdFile.id;
+    for (let i = 0; i < 10; i++) {
+      await new Promise(r => setTimeout(r, 1000));
+      const checkResult = await shopifyGraphQL(`
+        query($id: ID!) {
+          node(id: $id) {
+            ... on GenericFile {
+              url
+            }
+            ... on MediaImage {
+              image { url }
+            }
+          }
+        }
+      `, { id: fileId });
+      fileUrl = checkResult?.node?.url || checkResult?.node?.image?.url;
+      if (fileUrl) break;
+    }
+  }
+
+  return fileUrl || target.resourceUrl;
+}
+
+// Upload attachment for a booking (supports multiple files)
+app.post('/upload-attachment/:bookingId', upload.array('files', 10), async (req, res) => {
+  try {
+    // Support both single file (legacy) and multiple files
+    const files = req.files || (req.file ? [req.file] : []);
+    if (files.length === 0) return res.status(400).json({ error: 'No files provided' });
+    
+    const bookingId = req.params.bookingId;
+    console.log(`Uploading ${files.length} attachment(s) for booking ${bookingId}`);
 
     // Get existing attachments
     const attMap = await getAttachments();
     if (!attMap[bookingId]) attMap[bookingId] = [];
-    attMap[bookingId].push({
-      id: Date.now().toString(36),
-      filename: filename,
-      mimetype: file.mimetype,
-      size: file.size,
-      dataUrl: dataUrl,
-      uploadedAt: new Date().toISOString()
-    });
+
+    const uploaded = [];
+    for (const file of files) {
+      const filename = (file.originalname || 'attachment').replace(/[/\\]/g, '_');
+      console.log(`  Uploading: ${filename} (${file.size} bytes)`);
+      
+      try {
+        // Upload to Shopify CDN
+        const cdnUrl = await uploadToShopifyCDN(file.buffer, filename, file.mimetype);
+        
+        const att = {
+          id: Date.now().toString(36) + Math.random().toString(36).substr(2, 4),
+          filename: filename,
+          mimetype: file.mimetype,
+          size: file.size,
+          dataUrl: cdnUrl,  // Store CDN URL instead of base64
+          uploadedAt: new Date().toISOString()
+        };
+        attMap[bookingId].push(att);
+        uploaded.push(att);
+      } catch (uploadErr) {
+        console.error(`  Failed to upload ${filename}:`, uploadErr.message);
+        // Fallback: store as base64 for small files only
+        if (file.size < 200000) { // < 200KB
+          const base64 = file.buffer.toString('base64');
+          const dataUrl = `data:${file.mimetype};base64,${base64}`;
+          const att = {
+            id: Date.now().toString(36) + Math.random().toString(36).substr(2, 4),
+            filename: filename,
+            mimetype: file.mimetype,
+            size: file.size,
+            dataUrl: dataUrl,
+            uploadedAt: new Date().toISOString()
+          };
+          attMap[bookingId].push(att);
+          uploaded.push(att);
+        } else {
+          uploaded.push({ filename, error: uploadErr.message });
+        }
+      }
+    }
 
     await setAttachments(attMap);
-    res.json({ success: true, attachments: attMap[bookingId].map(a => ({ id: a.id, filename: a.filename, mimetype: a.mimetype, size: a.size, uploadedAt: a.uploadedAt })) });
+    res.json({ 
+      success: true, 
+      attachments: attMap[bookingId].map(a => ({ 
+        id: a.id, filename: a.filename, mimetype: a.mimetype, 
+        size: a.size, uploadedAt: a.uploadedAt 
+      })),
+      uploaded: uploaded.length
+    });
   } catch (error) {
     console.error('Upload attachment error:', error);
     res.status(500).json({ error: error.message });
   }
 });
+
 
 // Get attachments for a booking
 app.get('/get-attachments/:bookingId', async (req, res) => {
