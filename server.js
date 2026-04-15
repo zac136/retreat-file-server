@@ -1976,6 +1976,15 @@ app.post('/save-invoices', async (req, res) => {
 const PORT = process.env.PORT || 3001;
 
 // Serve receipt override JS
+// Serve html2canvas from our server to bypass Shopify CSP
+app.get('/html2canvas.min.js', (req, res) => {
+  res.setHeader('Content-Type', 'application/javascript');
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const path = require('path');
+  res.sendFile(path.join(__dirname, 'html2canvas.min.js'));
+});
+
 app.get('/receipt-override.js', (req, res) => {
   res.setHeader('Content-Type', 'application/javascript');
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
