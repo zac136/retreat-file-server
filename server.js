@@ -2125,22 +2125,6 @@ app.get('/receipt-override.js', (req, res) => {
   
   res.send(js);
 });
-            document.body.removeChild(container);
-          },'image/png');
-        }).catch(function(err){
-          if(typeof raToast==='function') raToast('\u26a0\ufe0f \u062e\u0637\u0623 \u0641\u064a \u062a\u0648\u0644\u064a\u062f \u0627\u0644\u0625\u064a\u0635\u0627\u0644','error');
-          console.error('[Receipt] html2canvas error:',err);
-          document.body.removeChild(container);
-        });
-      };
-      if(img&&!img.complete){img.onload=doRender;img.onerror=doRender;setTimeout(doRender,3000);}
-      else{setTimeout(doRender,200);}
-    };
-    console.log('[Receipt Override v4] raGenerateReceiptPDF replaced with PNG version');
-  }, 500);
-})();
-`);
-});
 
 app.listen(PORT, () => {
   console.log(`Retreat File Server running on port ${PORT}`);
