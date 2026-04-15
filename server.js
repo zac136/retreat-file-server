@@ -2165,22 +2165,22 @@ app.get('/receipt-override.js', (req, res) => {
       
       allBtns.forEach(function(btn) {
         // ---- 1. Rename receipt button and add view receipts button ----
-        if (btn.textContent.trim() === '\\ud83e\\uddc9 \\u0625\\u064a\\u0635\\u0627\\u0644\\u0627\\u062a') {
-          btn.textContent = '\\ud83e\\uddc9 \\u0625\\u0646\\u0634\\u0627\\u0621 \\u0625\\u064a\\u0635\\u0627\\u0644';
+        if (btn.textContent.includes('\\u0625\\u064a\\u0635\\u0627\\u0644\\u0627\\u062a') && !btn.textContent.includes('\\u0625\\u0646\\u0634\\u0627\\u0621')) {
+          btn.textContent = '\\ud83e\\uddfe \\u0625\\u0646\\u0634\\u0627\\u0621 \\u0625\\u064a\\u0635\\u0627\\u0644';
           
           // Add "view receipts" button after it
           if (!card.querySelector('.ra-view-receipts-btn')) {
             var viewBtn = document.createElement('button');
             viewBtn.className = 'ra-btn ra-view-receipts-btn';
             viewBtn.style.cssText = 'background:#5a4a3a;color:#fff;margin:2px;padding:6px 10px;border:none;border-radius:6px;cursor:pointer;font-size:0.8rem;font-family:inherit;';
-            viewBtn.textContent = '\\ud83d\\udcca \\u0645\\u0634\\u0627\\u0647\\u062f\\u0629 \\u0627\\u0644\\u0625\\u064a\\u0635\\u0627\\u0644\\u0627\\u062a';
+            viewBtn.textContent = '\\ud83d\\udcc4 \\u0645\\u0634\\u0627\\u0647\\u062f\\u0629 \\u0627\\u0644\\u0625\\u064a\\u0635\\u0627\\u0644\\u0627\\u062a';
             viewBtn.onclick = function() { window._raViewReceipts(bookingId); };
             btn.parentNode.insertBefore(viewBtn, btn.nextSibling);
           }
         }
         
         // ---- 2. Fix civil ID button - add for ALL bookings ----
-        if (btn.textContent.trim() === '\\ud83e\\udea8 \\u0627\\u0644\\u0628\\u0637\\u0627\\u0642\\u0629 \\u0627\\u0644\\u0645\\u062f\\u0646\\u064a\\u0629') {
+        if (btn.textContent.includes('\\u0627\\u0644\\u0628\\u0637\\u0627\\u0642\\u0629') && btn.textContent.includes('\\u0627\\u0644\\u0645\\u062f\\u0646\\u064a\\u0629')) {
           // Override onclick to use our enhanced version
           btn.onclick = function() { window._raViewCivilIdEnhanced(bookingId); };
         }
@@ -2230,13 +2230,13 @@ app.get('/receipt-override.js', (req, res) => {
           setTimeout(function() {
             var allBtns = node.querySelectorAll('button.ra-btn');
             allBtns.forEach(function(btn) {
-              if (btn.textContent.trim() === '\\ud83e\\uddc9 \\u0625\\u064a\\u0635\\u0627\\u0644\\u0627\\u062a') {
-                btn.textContent = '\\ud83e\\uddc9 \\u0625\\u0646\\u0634\\u0627\\u0621 \\u0625\\u064a\\u0635\\u0627\\u0644';
+              if (btn.textContent.includes('\\u0625\\u064a\\u0635\\u0627\\u0644\\u0627\\u062a') && !btn.textContent.includes('\\u0625\\u0646\\u0634\\u0627\\u0621')) {
+                btn.textContent = '\\ud83e\\uddfe \\u0625\\u0646\\u0634\\u0627\\u0621 \\u0625\\u064a\\u0635\\u0627\\u0644';
                 if (!node.querySelector('.ra-view-receipts-btn')) {
                   var viewBtn = document.createElement('button');
                   viewBtn.className = 'ra-btn ra-view-receipts-btn';
                   viewBtn.style.cssText = 'background:#5a4a3a;color:#fff;margin:2px;padding:6px 10px;border:none;border-radius:6px;cursor:pointer;font-size:0.8rem;font-family:inherit;';
-                  viewBtn.textContent = '\\ud83d\\udcca \\u0645\\u0634\\u0627\\u0647\\u062f\\u0629 \\u0627\\u0644\\u0625\\u064a\\u0635\\u0627\\u0644\\u0627\\u062a';
+                  viewBtn.textContent = '\\ud83d\\udcc4 \\u0645\\u0634\\u0627\\u0647\\u062f\\u0629 \\u0627\\u0644\\u0625\\u064a\\u0635\\u0627\\u0644\\u0627\\u062a';
                   viewBtn.onclick = function() { window._raViewReceipts(bookingId); };
                   btn.parentNode.insertBefore(viewBtn, btn.nextSibling);
                 }
