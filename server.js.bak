@@ -252,38 +252,28 @@ app.post('/save-booking', async (req, res) => {
       booking.signatureToken = crypto.randomBytes(16).toString('hex');
     }
 
-    // Handle civil ID image - upload to Shopify CDN for unlimited size
+    // Handle civil ID image - store in separate metafield to avoid size issues
     let civilIdImage = booking.civilIdImageUrl || '';
-    if (civilIdImage && civilIdImage.startsWith('data:') && civilIdImage.length > 100) {
+    if (civilIdImage && civilIdImage.startsWith('data:') && civilIdImage.length > 1000) {
+      // Save image to separate metafield
       try {
-        const matches = civilIdImage.match(/^data:([^;]+);base64,(.+)$/);
-        if (matches) {
-          const mimetype = matches[1];
-          const fileBuffer = Buffer.from(matches[2], 'base64');
-          const ext = mimetype.split('/')[1] || 'jpg';
-          const filename = `civil-id-${booking.id}-${Date.now()}.${ext}`;
-          console.log(`[save-booking] Uploading civil ID to Shopify CDN (${fileBuffer.length} bytes)...`);
-          const cdnUrl = await uploadToShopifyCDN(fileBuffer, filename, mimetype);
-          console.log(`[save-booking] ✅ Civil ID uploaded to CDN: ${cdnUrl}`);
-          
-          // Store CDN URL in booking and metafield
-          booking.civilIdImageUrl = cdnUrl;
-          try {
-            const imagesMap = await getCivilIdImages();
-            // Clean old base64 entries
-            for (const key of Object.keys(imagesMap)) {
-              if (imagesMap[key] && imagesMap[key].startsWith('data:')) delete imagesMap[key];
-            }
-            imagesMap[booking.id] = cdnUrl;
-            await setCivilIdImages(imagesMap);
-          } catch (metaErr) {
-            console.error('[save-booking] Metafield warning:', metaErr.message);
-          }
+        const imagesMap = await getCivilIdImages();
+        imagesMap[booking.id] = civilIdImage;
+        
+        // Keep only last 20 images to avoid metafield size limit
+        const keys = Object.keys(imagesMap);
+        if (keys.length > 20) {
+          const toRemove = keys.slice(0, keys.length - 20);
+          toRemove.forEach(k => delete imagesMap[k]);
         }
+        
+        await setCivilIdImages(imagesMap);
+        console.log(`✅ Civil ID image saved for booking ${booking.id} (${civilIdImage.length} chars)`);
+        
+        // Store a reference in the booking
+        booking.civilIdImageUrl = 'STORED_IN_IMAGES';
       } catch (imgErr) {
-        console.error('[save-booking] Failed to upload civil ID to CDN:', imgErr.message);
-        // Keep the base64 as fallback but truncate for booking storage
-        booking.civilIdImageUrl = '';
+        console.error('Failed to save civil ID image separately:', imgErr.message);
       }
     }
 
@@ -343,11 +333,7 @@ app.get('/get-bookings', async (req, res) => {
     // Restore images and signatures into bookings
     const allBookings = (data.bookings || []).map(b => {
       let updated = b;
-      // Handle civil ID: STORED_IN_IMAGES (legacy) or check metafield for CDN URL
       if (b.civilIdImageUrl === 'STORED_IN_IMAGES' && imagesMap[b.id]) {
-        updated = { ...updated, civilIdImageUrl: imagesMap[b.id] };
-      } else if (!b.civilIdImageUrl && imagesMap[b.id]) {
-        // Fallback: check metafield even if booking doesn't have the flag
         updated = { ...updated, civilIdImageUrl: imagesMap[b.id] };
       }
       if (b.signatureDataURL === 'STORED_IN_SIGNATURES' && sigMap[b.id]) {
@@ -378,25 +364,13 @@ app.get('/get-bookings', async (req, res) => {
 app.get('/get-civil-id/:bookingId', async (req, res) => {
   try {
     const { bookingId } = req.params;
-    
-    // Check metafield first
     const imagesMap = await getCivilIdImages();
+    
     if (imagesMap[bookingId]) {
-      return res.json({ success: true, imageUrl: imagesMap[bookingId] });
+      res.json({ success: true, imageUrl: imagesMap[bookingId] });
+    } else {
+      res.status(404).json({ error: 'Image not found' });
     }
-    
-    // Fallback: check booking's civilIdImageUrl directly (CDN URL)
-    try {
-      const { data } = await getBookingsData();
-      const booking = (data.bookings || []).find(b => String(b.id) === String(bookingId));
-      if (booking && booking.civilIdImageUrl && booking.civilIdImageUrl !== 'STORED_IN_IMAGES' && booking.civilIdImageUrl.startsWith('http')) {
-        return res.json({ success: true, imageUrl: booking.civilIdImageUrl });
-      }
-    } catch (e) {
-      console.error('[get-civil-id] Booking lookup error:', e.message);
-    }
-    
-    res.status(404).json({ error: 'Image not found' });
   } catch (error) {
     console.error('Get civil ID error:', error);
     res.status(500).json({ error: error.message });
@@ -527,34 +501,21 @@ app.put('/update-booking/:id', async (req, res) => {
     const idx = existingData.bookings.findIndex(b => b.id === id);
     if (idx === -1) return res.status(404).json({ error: 'Booking not found' });
 
-    // Handle civil ID image update - upload to Shopify CDN
+    // Handle civil ID image update
     let civilIdImage = updates.civilIdImageUrl || '';
-    if (civilIdImage && civilIdImage.startsWith('data:') && civilIdImage.length > 100) {
+    if (civilIdImage && civilIdImage.startsWith('data:') && civilIdImage.length > 1000) {
       try {
-        const matches = civilIdImage.match(/^data:([^;]+);base64,(.+)$/);
-        if (matches) {
-          const mimetype = matches[1];
-          const fileBuffer = Buffer.from(matches[2], 'base64');
-          const ext = mimetype.split('/')[1] || 'jpg';
-          const filename = `civil-id-${id}-${Date.now()}.${ext}`;
-          console.log(`[update-booking] Uploading civil ID to CDN (${fileBuffer.length} bytes)...`);
-          const cdnUrl = await uploadToShopifyCDN(fileBuffer, filename, mimetype);
-          console.log(`[update-booking] ✅ Civil ID CDN: ${cdnUrl}`);
-          updates.civilIdImageUrl = cdnUrl;
-          try {
-            const imagesMap = await getCivilIdImages();
-            for (const key of Object.keys(imagesMap)) {
-              if (imagesMap[key] && imagesMap[key].startsWith('data:')) delete imagesMap[key];
-            }
-            imagesMap[id] = cdnUrl;
-            await setCivilIdImages(imagesMap);
-          } catch (metaErr) {
-            console.error('[update-booking] Metafield warning:', metaErr.message);
-          }
+        const imagesMap = await getCivilIdImages();
+        imagesMap[id] = civilIdImage;
+        const keys = Object.keys(imagesMap);
+        if (keys.length > 20) {
+          const toRemove = keys.slice(0, keys.length - 20);
+          toRemove.forEach(k => delete imagesMap[k]);
         }
+        await setCivilIdImages(imagesMap);
+        updates.civilIdImageUrl = 'STORED_IN_IMAGES';
       } catch (imgErr) {
-        console.error('[update-booking] Failed to upload civil ID:', imgErr.message);
-        updates.civilIdImageUrl = '';
+        console.error('Failed to save civil ID image:', imgErr.message);
       }
     }
 
@@ -2018,190 +1979,39 @@ const PORT = process.env.PORT || 3001;
 app.post('/upload-civil-id/:bookingId', upload.single('file'), async (req, res) => {
   try {
     const { bookingId } = req.params;
-    let fileBuffer, filename, mimetype;
+    let dataUrl;
     
     // Support both multipart file upload and JSON base64
     if (req.file) {
-      fileBuffer = req.file.buffer;
-      filename = `civil-id-${bookingId}-${Date.now()}.${req.file.mimetype.split('/')[1] || 'jpg'}`;
-      mimetype = req.file.mimetype;
+      const base64 = req.file.buffer.toString('base64');
+      dataUrl = `data:${req.file.mimetype};base64,${base64}`;
       console.log(`[upload-civil-id] Uploading civil ID for booking ${bookingId} via file, size: ${req.file.size}`);
     } else if (req.body && req.body.imageData) {
-      // Convert base64 data URL to buffer
-      const dataUrl = req.body.imageData;
-      const matches = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
-      if (!matches) return res.status(400).json({ error: 'Invalid image data' });
-      mimetype = matches[1];
-      fileBuffer = Buffer.from(matches[2], 'base64');
-      filename = `civil-id-${bookingId}-${Date.now()}.${mimetype.split('/')[1] || 'jpg'}`;
-      console.log(`[upload-civil-id] Uploading civil ID for booking ${bookingId} via JSON base64, size: ${fileBuffer.length}`);
+      dataUrl = req.body.imageData;
+      console.log(`[upload-civil-id] Uploading civil ID for booking ${bookingId} via JSON base64, length: ${dataUrl.length}`);
     } else {
       return res.status(400).json({ error: 'No file provided' });
     }
     
-    // Upload to Shopify CDN instead of metafield
-    console.log(`[upload-civil-id] Uploading to Shopify CDN...`);
-    const cdnUrl = await uploadToShopifyCDN(fileBuffer, filename, mimetype);
-    console.log(`[upload-civil-id] CDN URL: ${cdnUrl}`);
+    // Save to civil_id_images metafield
+    const imagesMap = await getCivilIdImages();
+    imagesMap[bookingId] = dataUrl;
+    await setCivilIdImages(imagesMap);
     
-    // Also save CDN URL in civil_id_images metafield (just the URL string, not base64)
-    try {
-      const imagesMap = await getCivilIdImages();
-      // Clean old base64 data - only keep CDN URLs
-      for (const key of Object.keys(imagesMap)) {
-        if (imagesMap[key] && imagesMap[key].startsWith('data:')) {
-          delete imagesMap[key];
-        }
-      }
-      imagesMap[bookingId] = cdnUrl;
-      await setCivilIdImages(imagesMap);
-    } catch (metaErr) {
-      console.error('[upload-civil-id] Metafield save warning:', metaErr.message);
-      // Not critical - CDN URL is the source of truth now
-    }
-    
-    // Update the booking's civilIdImageUrl to the CDN URL directly
-    try {
-      const { data } = await getBookingsData();
-      const bookings = data.bookings || [];
-      const idx = bookings.findIndex(b => String(b.id) === String(bookingId));
-      if (idx !== -1) {
-        bookings[idx].civilIdImageUrl = cdnUrl;
-        data.bookings = bookings;
-        await setBookingsData(data);
-      }
-    } catch (bookingErr) {
-      console.error('[upload-civil-id] Booking update warning:', bookingErr.message);
+    // Also update the booking's civilIdImageUrl to STORED_IN_IMAGES
+    const { data, metafieldId } = await getBookingsData();
+    const bookings = data.bookings || [];
+    const idx = bookings.findIndex(b => String(b.id) === String(bookingId));
+    if (idx !== -1) {
+      bookings[idx].civilIdImageUrl = 'STORED_IN_IMAGES';
+      data.bookings = bookings;
+      await setBookingsData(data, metafieldId);
     }
     
     console.log(`[upload-civil-id] Successfully saved civil ID for booking ${bookingId}`);
-    res.json({ success: true, message: 'Civil ID uploaded successfully', cdnUrl });
+    res.json({ success: true, message: 'Civil ID uploaded successfully' });
   } catch (error) {
     console.error('[upload-civil-id] Error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ─── Generate Receipt as PNG image on server ─────────────────────────────────
-app.get('/generate-receipt-image/:bookingId/:invoiceIdx', async (req, res) => {
-  try {
-    const { bookingId, invoiceIdx } = req.params;
-    const idx = parseInt(invoiceIdx);
-    
-    // Get invoice data
-    const invoiceMap = await getInvoices();
-    const invoices = invoiceMap[bookingId] || [];
-    if (!invoices[idx]) {
-      return res.status(404).json({ error: 'Invoice not found' });
-    }
-    const inv = invoices[idx];
-    
-    // Get booking data
-    const { data } = await getBookingsData();
-    const booking = (data.bookings || []).find(b => String(b.id) === String(bookingId));
-    if (!booking) {
-      return res.status(404).json({ error: 'Booking not found' });
-    }
-    
-    const typeName = inv.type === 'deposit' ? '\u0625\u064a\u0635\u0627\u0644 \u0627\u0633\u062a\u0644\u0627\u0645 \u0639\u0631\u0628\u0648\u0646' : '\u0625\u064a\u0635\u0627\u0644 \u0627\u0633\u062a\u0644\u0627\u0645 \u0645\u0628\u0644\u063a \u0627\u0644\u0625\u064a\u062c\u0627\u0631';
-    const ci = booking.checkIn || booking.checkin || '';
-    const co = booking.checkOut || booking.checkout || '';
-    const guestName = booking.name || booking.guest_name || '';
-    const logo = 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663530851339/roNCVxbVgYKQtCRp.png';
-    
-    const html = `<!DOCTYPE html>
-<html dir="rtl" lang="ar">
-<head>
-  <meta charset="UTF-8">
-  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet">
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: 'Tajawal', Arial, sans-serif; background: #f6f3ee; width: 500px; padding: 30px; }
-    .header { text-align: center; margin-bottom: 20px; }
-    .header img { max-width: 100px; margin-bottom: 8px; }
-    .header h2 { font-size: 20px; color: #1B4332; }
-    .header p { color: #888; font-size: 12px; margin-top: 4px; }
-    table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
-    td { padding: 10px; }
-    tr { border-bottom: 1px solid #ddd; }
-    .label { text-align: right; font-weight: bold; color: #1B4332; width: 40%; }
-    .value { text-align: left; }
-    .footer { text-align: center; color: #aaa; font-size: 11px; }
-  </style>
-</head>
-<body>
-  <div class="header">
-    <img src="${logo}" crossorigin="anonymous" />
-    <h2>${typeName}</h2>
-    <p>\u0634\u0627\u0644\u064a\u0647 \u0631\u064a\u062a\u0631\u064a\u062a - \u0627\u0644\u062e\u064a\u0631\u0627\u0646\u060c \u0627\u0644\u0645\u0631\u062d\u0644\u0629 \u0627\u0644\u062e\u0627\u0645\u0633\u0629\u060c \u0634\u0627\u0644\u064a\u0647 \u0631\u0642\u0645 3423</p>
-  </div>
-  <table>
-    <tr><td class="label">\u0631\u0642\u0645 \u0627\u0644\u0625\u064a\u0635\u0627\u0644</td><td class="value">${inv.number || ''}</td></tr>
-    <tr><td class="label">\u062a\u0627\u0631\u064a\u062e \u0627\u0644\u0625\u064a\u0635\u0627\u0644</td><td class="value">${inv.date || ''}</td></tr>
-    <tr><td class="label">\u0646\u0648\u0639 \u0627\u0644\u0625\u064a\u0635\u0627\u0644</td><td class="value">${typeName}</td></tr>
-    <tr><td class="label">\u0627\u0644\u0627\u0633\u0645</td><td class="value">${guestName}</td></tr>
-    <tr><td class="label">\u0627\u0644\u0645\u0628\u0644\u063a</td><td class="value">${inv.amount} \u062f.\u0643</td></tr>
-    <tr><td class="label">\u062a\u0648\u0627\u0631\u064a\u062e \u0627\u0644\u062d\u062c\u0632</td><td class="value">${co} \u2192 ${ci}</td></tr>
-    ${inv.notes ? '<tr><td class="label">\u0645\u0644\u0627\u062d\u0638\u0627\u062a</td><td class="value">' + inv.notes + '</td></tr>' : ''}
-  </table>
-  <p class="footer">\u0647\u0630\u0627 \u0625\u064a\u0635\u0627\u0644 \u0625\u0644\u0643\u062a\u0631\u0648\u0646\u064a \u0635\u0627\u062f\u0631 \u0645\u0646 \u0646\u0638\u0627\u0645 Retreat</p>
-</body>
-</html>`;
-    
-    // Generate PNG using Puppeteer
-    const browser = await puppeteer.launch({
-      headless: 'new',
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-    });
-    const page = await browser.newPage();
-    await page.setViewport({ width: 500, height: 600, deviceScaleFactor: 2 });
-    await page.setContent(html, { waitUntil: 'networkidle0' });
-    
-    // Wait for font to load
-    await page.evaluate(() => document.fonts.ready);
-    
-    const bodyElement = await page.$('body');
-    const pngBuffer = await bodyElement.screenshot({ type: 'png' });
-    await browser.close();
-    
-    // Upload to Shopify CDN
-    const nm = guestName.replace(/\s+/g, '_') || 'customer';
-    const safeDate = (inv.date || new Date().toLocaleDateString('en-GB')).replace(/\//g, '-');
-    const typeFile = inv.type === 'deposit' ? 'receipt_deposit' : 'receipt_rent';
-    const fileName = `${typeFile}_${nm}_${safeDate}.png`;
-    
-    let cdnUrl;
-    try {
-      cdnUrl = await uploadToShopifyCDN(pngBuffer, fileName, 'image/png');
-      console.log(`[receipt-image] Uploaded to CDN: ${cdnUrl}`);
-      
-      // Also save as attachment
-      try {
-        const attMap = await getAttachments();
-        if (!attMap[bookingId]) attMap[bookingId] = [];
-        attMap[bookingId].push({
-          id: Date.now().toString(36) + Math.random().toString(36).substr(2, 4),
-          filename: fileName,
-          mimetype: 'image/png',
-          size: pngBuffer.length,
-          dataUrl: cdnUrl,
-          uploadedAt: new Date().toISOString()
-        });
-        await setAttachments(attMap);
-      } catch (attErr) {
-        console.error('[receipt-image] Attachment save warning:', attErr.message);
-      }
-    } catch (uploadErr) {
-      console.error('[receipt-image] CDN upload failed:', uploadErr.message);
-    }
-    
-    // Return the image
-    res.setHeader('Content-Type', 'image/png');
-    res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
-    res.setHeader('X-CDN-URL', cdnUrl || '');
-    res.send(pngBuffer);
-  } catch (error) {
-    console.error('[receipt-image] Error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -2225,49 +2035,123 @@ app.get('/receipt-override.js', (req, res) => {
 (function() {
   var SERVER = 'https://retreat-file-server.onrender.com';
   
-  // ========== PART 1: Receipt PNG via Server ==========
+  // ========== PART 1: Receipt PDF Override ==========
   var _checkInterval = setInterval(function() {
     if (typeof window.raGenerateReceiptPDF !== 'function') return;
     clearInterval(_checkInterval);
     if (window.raGenerateReceiptPDF._pngOverride) return;
     
-    console.log('[Receipt Override] Applying server-side PNG generation...');
+    console.log('[Receipt Override] Applying PNG override (with html2canvas loader)...');
     
     window.raGenerateReceiptPDF = function(bookingId, invoiceIdx) {
-      if(typeof raToast==='function') raToast('\\u062c\\u0627\\u0631\\u064a \\u062a\\u0648\\u0644\\u064a\\u062f \\u0627\\u0644\\u0625\\u064a\\u0635\\u0627\\u0644...', 'info');
-      
       var store = (typeof getInvoiceStore === 'function') ? getInvoiceStore() : JSON.parse(localStorage.getItem('ra_invoices') || '{}');
       var invoices = store[bookingId];
-      var inv = invoices ? invoices[invoiceIdx] : null;
+      if (!invoices || !invoices[invoiceIdx]) { if(typeof raToast==='function') raToast('\\u26a0\\ufe0f \\u0644\\u0627 \\u064a\\u0648\\u062c\\u062f \\u0625\\u064a\\u0635\\u0627\\u0644', 'error'); return; }
+      var inv = invoices[invoiceIdx];
       var b = (typeof allBookings !== 'undefined') ? allBookings.find(function(x){return String(x.id)===String(bookingId);}) : null;
-      var nm = b ? (b.name||b.guest_name||'customer').replace(/\\s+/g,'_') : 'customer';
-      var typeFile = (inv && inv.type==='deposit') ? 'receipt_deposit' : 'receipt_rent';
-      var safeDate = (inv && inv.date ? inv.date : new Date().toLocaleDateString('en-GB')).replace(/\\//g,'-');
+      if (!b) { if(typeof raToast==='function') raToast('\\u26a0\\ufe0f \\u0644\\u0645 \\u064a\\u062a\\u0645 \\u0627\\u0644\\u0639\\u062b\\u0648\\u0631 \\u0639\\u0644\\u0649 \\u0627\\u0644\\u062d\\u062c\\u0632', 'error'); return; }
+      
+      var typeName = inv.type==='deposit' ? '\\u0625\\u064a\\u0635\\u0627\\u0644 \\u0627\\u0633\\u062a\\u0644\\u0627\\u0645 \\u0639\\u0631\\u0628\\u0648\\u0646' : '\\u0625\\u064a\\u0635\\u0627\\u0644 \\u0627\\u0633\\u062a\\u0644\\u0627\\u0645 \\u0645\\u0628\\u0644\\u063a \\u0627\\u0644\\u0625\\u064a\\u062c\\u0627\\u0631';
+      var typeFile = inv.type==='deposit' ? 'receipt_deposit' : 'receipt_rent';
+      var nm = (b.name||b.guest_name||'customer').replace(/\\s+/g,'_');
+      var safeDate = (inv.date || new Date().toLocaleDateString('en-GB')).replace(/\\//g,'-');
       var fileName = typeFile + '_' + nm + '_' + safeDate + '.png';
       
-      // Fetch receipt image from server
-      fetch(SERVER + '/generate-receipt-image/' + bookingId + '/' + invoiceIdx)
-        .then(function(r) {
-          if (!r.ok) throw new Error('Server error: ' + r.status);
-          return r.blob();
-        })
-        .then(function(blob) {
-          // Download the image
-          var url = URL.createObjectURL(blob);
-          var a = document.createElement('a');
-          a.href = url; a.download = fileName;
-          document.body.appendChild(a); a.click(); document.body.removeChild(a);
-          setTimeout(function(){ URL.revokeObjectURL(url); }, 5000);
-          if(typeof raToast==='function') raToast('\\u2705 \\u062a\\u0645 \\u062a\\u062d\\u0645\\u064a\\u0644 \\u0627\\u0644\\u0625\\u064a\\u0635\\u0627\\u0644', 'success');
-        })
-        .catch(function(err) {
-          console.error('[Receipt] Server generation error:', err);
-          if(typeof raToast==='function') raToast('\\u274c \\u0641\\u0634\\u0644 \\u062a\\u0648\\u0644\\u064a\\u062f \\u0627\\u0644\\u0625\\u064a\\u0635\\u0627\\u0644: ' + err.message, 'error');
+      if(typeof raToast==='function') raToast('\\u062c\\u0627\\u0631\\u064a \\u062a\\u0648\\u0644\\u064a\\u062f \\u0627\\u0644\\u0625\\u064a\\u0635\\u0627\\u0644...', 'info');
+      
+      var ci = b.checkIn||b.checkin||'';
+      var co = b.checkOut||b.checkout||'';
+      var logo = 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663530851339/roNCVxbVgYKQtCRp.png';
+      
+      var html = '<div style="direction:rtl;font-family:Tajawal,Arial,sans-serif;background:#f6f3ee;padding:30px;max-width:500px;margin:0 auto;">'
+        +'<div style="text-align:center;margin-bottom:20px;">'
+        +'<img src="'+logo+'" style="max-width:100px;margin-bottom:8px;" crossorigin="anonymous" />'
+        +'<h2 style="margin:0;font-size:20px;color:#1B4332;">'+typeName+'</h2>'
+        +'<p style="margin:4px 0 0;color:#888;font-size:12px;">\\u0634\\u0627\\u0644\\u064a\\u0647 \\u0631\\u064a\\u062a\\u0631\\u064a\\u062a - \\u0627\\u0644\\u062e\\u064a\\u0631\\u0627\\u0646\\u060c \\u0627\\u0644\\u0645\\u0631\\u062d\\u0644\\u0629 \\u0627\\u0644\\u062e\\u0627\\u0645\\u0633\\u0629\\u060c \\u0634\\u0627\\u0644\\u064a\\u0647 \\u0631\\u0642\\u0645 3423</p>'
+        +'</div>'
+        +'<table style="width:100%;border-collapse:collapse;margin-bottom:16px;">'
+        +'<tr style="border-bottom:1px solid #ddd;"><td style="padding:10px;text-align:right;font-weight:bold;color:#1B4332;width:40%;">\\u0631\\u0642\\u0645 \\u0627\\u0644\\u0625\\u064a\\u0635\\u0627\\u0644</td><td style="padding:10px;text-align:left;">'+(inv.number||'')+'</td></tr>'
+        +'<tr style="border-bottom:1px solid #ddd;"><td style="padding:10px;text-align:right;font-weight:bold;color:#1B4332;">\\u062a\\u0627\\u0631\\u064a\\u062e \\u0627\\u0644\\u0625\\u064a\\u0635\\u0627\\u0644</td><td style="padding:10px;text-align:left;">'+(inv.date||'')+'</td></tr>'
+        +'<tr style="border-bottom:1px solid #ddd;"><td style="padding:10px;text-align:right;font-weight:bold;color:#1B4332;">\\u0646\\u0648\\u0639 \\u0627\\u0644\\u0625\\u064a\\u0635\\u0627\\u0644</td><td style="padding:10px;text-align:left;">'+typeName+'</td></tr>'
+        +'<tr style="border-bottom:1px solid #ddd;"><td style="padding:10px;text-align:right;font-weight:bold;color:#1B4332;">\\u0627\\u0644\\u0627\\u0633\\u0645</td><td style="padding:10px;text-align:left;">'+(b.name||b.guest_name||'')+'</td></tr>'
+        +'<tr style="border-bottom:1px solid #ddd;"><td style="padding:10px;text-align:right;font-weight:bold;color:#1B4332;">\\u0627\\u0644\\u0645\\u0628\\u0644\\u063a</td><td style="padding:10px;text-align:left;">'+inv.amount+' \\u062f.\\u0643</td></tr>'
+        +'<tr style="border-bottom:1px solid #ddd;"><td style="padding:10px;text-align:right;font-weight:bold;color:#1B4332;">\\u062a\\u0648\\u0627\\u0631\\u064a\\u062e \\u0627\\u0644\\u062d\\u062c\\u0632</td><td style="padding:10px;text-align:left;">'+co+' \\u2192 '+ci+'</td></tr>'
+        +(inv.notes ? '<tr><td style="padding:10px;text-align:right;font-weight:bold;color:#1B4332;">\\u0645\\u0644\\u0627\\u062d\\u0638\\u0627\\u062a</td><td style="padding:10px;text-align:left;">'+inv.notes+'</td></tr>' : '')
+        +'</table>'
+        +'<p style="text-align:center;color:#aaa;font-size:11px;">\\u0647\\u0630\\u0627 \\u0625\\u064a\\u0635\\u0627\\u0644 \\u0625\\u0644\\u0643\\u062a\\u0631\\u0648\\u0646\\u064a \\u0635\\u0627\\u062f\\u0631 \\u0645\\u0646 \\u0646\\u0638\\u0627\\u0645 Retreat</p>'
+        +'</div>';
+      
+      var container = document.createElement('div');
+      container.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:500px;background:#f6f3ee;z-index:-1;';
+      container.innerHTML = html;
+      document.body.appendChild(container);
+      
+      var img = container.querySelector('img');
+      function doRender() {
+        if (typeof html2canvas === 'undefined') {
+          var sc = document.createElement('script');
+          sc.src = SERVER + '/html2canvas.min.js';
+          sc.onload = function() { doCapture(); };
+          sc.onerror = function() {
+            var sc2 = document.createElement('script');
+            sc2.src = 'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
+            sc2.onload = function() { doCapture(); };
+            sc2.onerror = function() {
+              if(typeof raToast==='function') raToast('\\u274c \\u0641\\u0634\\u0644 \\u062a\\u062d\\u0645\\u064a\\u0644 \\u0645\\u0643\\u062a\\u0628\\u0629 \\u0627\\u0644\\u062a\\u0635\\u0648\\u064a\\u0631', 'error');
+              document.body.removeChild(container);
+            };
+            document.head.appendChild(sc2);
+          };
+          document.head.appendChild(sc);
+        } else {
+          doCapture();
+        }
+      }
+      
+      function doCapture() {
+        html2canvas(container, { scale: 2, useCORS: true, backgroundColor: '#f6f3ee', logging: false }).then(function(canvas) {
+          document.body.removeChild(container);
+          canvas.toBlob(function(blob) {
+            if (!blob) { if(typeof raToast==='function') raToast('\\u274c \\u0641\\u0634\\u0644 \\u062a\\u0648\\u0644\\u064a\\u062f \\u0627\\u0644\\u0625\\u064a\\u0635\\u0627\\u0644', 'error'); return; }
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            a.href = url; a.download = fileName;
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            setTimeout(function(){ URL.revokeObjectURL(url); }, 5000);
+            if(typeof raToast==='function') raToast('\\u2705 \\u062a\\u0645 \\u062a\\u062d\\u0645\\u064a\\u0644 \\u0627\\u0644\\u0625\\u064a\\u0635\\u0627\\u0644', 'success');
+            var formData = new FormData();
+            formData.append('files', blob, fileName);
+            fetch(SERVER + '/upload-attachment/' + bookingId, {
+              method: 'POST',
+              body: formData
+            }).then(function(r) { return r.json(); })
+            .then(function(data) {
+              if (data.success) {
+                console.log('[Receipt] PNG uploaded as attachment:', fileName);
+                if(typeof raToast==='function') raToast('\\ud83d\\udcce \\u062a\\u0645 \\u062d\\u0641\\u0638 \\u0627\\u0644\\u0625\\u064a\\u0635\\u0627\\u0644 \\u0641\\u064a \\u0627\\u0644\\u0645\\u0631\\u0641\\u0642\\u0627\\u062a', 'success');
+              }
+            }).catch(function(err) {
+              console.error('[Receipt] Upload error:', err);
+            });
+          }, 'image/png');
+        }).catch(function(err) {
+          if(typeof raToast==='function') raToast('\\u274c \\u0641\\u0634\\u0644: ' + err.message, 'error');
+          console.error('[Receipt] html2canvas error:', err);
+          document.body.removeChild(container);
         });
+      }
+      
+      if (img && !img.complete) {
+        img.onload = doRender;
+        img.onerror = doRender;
+        setTimeout(doRender, 3000);
+      } else {
+        setTimeout(doRender, 200);
+      }
     };
     
     window.raGenerateReceiptPDF._pngOverride = true;
-    console.log('[Receipt Override] Server-side PNG generation applied!');
+    console.log('[Receipt Override] PNG override applied successfully!');
   }, 500);
   
   // ========== PART 2: UI Enhancements ==========
@@ -2429,10 +2313,7 @@ app.get('/receipt-override.js', (req, res) => {
         content += '</div>';
         content += '<div style="display:flex;justify-content:space-between;align-items:center;">';
         content += '<span style="font-weight:bold;font-size:1.1rem;color:#1B4332;">'+inv.amount+' \\u062f.\\u0643</span>';
-        content += '<div style="display:flex;gap:6px;">';
-        content += '<button onclick="window._raViewReceiptImage(\\''+bookingId+'\\','+idx+')" style="background:#5a4a3a;color:#fff;border:none;padding:6px 10px;border-radius:6px;cursor:pointer;font-size:0.8rem;">\\ud83d\\udc41 \\u0645\\u0634\\u0627\\u0647\\u062f\\u0629</button>';
-        content += '<button onclick="window.raGenerateReceiptPDF(\\''+bookingId+'\\','+idx+')" style="background:#2d6a4f;color:#fff;border:none;padding:6px 10px;border-radius:6px;cursor:pointer;font-size:0.8rem;">\\ud83d\\udce5 \\u062a\\u062d\\u0645\\u064a\\u0644</button>';
-        content += '</div>';
+        content += '<button onclick="window.raGenerateReceiptPDF(\\''+bookingId+'\\','+idx+')" style="background:#2d6a4f;color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:0.8rem;">\\ud83d\\udce5 \\u062a\\u062d\\u0645\\u064a\\u0644</button>';
         content += '</div>';
         if (inv.notes) {
           content += '<p style="margin:6px 0 0;color:#888;font-size:0.8rem;">\\ud83d\\udcdd '+inv.notes+'</p>';
@@ -2574,47 +2455,6 @@ app.get('/receipt-override.js', (req, res) => {
   window._raReplaceCivilId = function(bookingId, name) {
     var overlay = document.getElementById('ra-civilid-overlay');
     if (overlay) showCivilIdUploadForm(overlay, bookingId, name);
-  };
-  
-  // ========== PART 5: View Receipt as Image ==========
-  window._raViewReceiptImage = function(bookingId, invoiceIdx) {
-    // Remove existing overlay
-    var existing = document.getElementById('ra-receipt-image-overlay');
-    if (existing) existing.remove();
-    
-    var overlay = document.createElement('div');
-    overlay.id = 'ra-receipt-image-overlay';
-    overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.9);z-index:999999;display:flex;align-items:center;justify-content:center;padding:16px;';
-    overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
-    
-    overlay.innerHTML = '<div style="text-align:center;color:#fff;font-family:Tajawal,Arial,sans-serif;"><p>\u062c\u0627\u0631\u064a \u062a\u0648\u0644\u064a\u062f \u0627\u0644\u0625\u064a\u0635\u0627\u0644...</p></div>';
-    document.body.appendChild(overlay);
-    
-    var imgUrl = SERVER + '/generate-receipt-image/' + bookingId + '/' + invoiceIdx;
-    
-    var img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = function() {
-      overlay.innerHTML = '<div style="background:#fff;border-radius:12px;max-width:550px;width:100%;max-height:90vh;overflow:auto;padding:16px;position:relative;direction:rtl;font-family:Tajawal,Arial,sans-serif;">'
-        + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
-        + '<h3 style="margin:0;font-size:1rem;color:#1B4332;">\ud83e\uddfe \u0627\u0644\u0625\u064a\u0635\u0627\u0644</h3>'
-        + '<button onclick="document.getElementById(\'ra-receipt-image-overlay\').remove()" style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:#999;">&times;</button>'
-        + '</div>'
-        + '<img src="' + imgUrl + '" style="width:100%;border-radius:8px;border:1px solid #ddd;" />'
-        + '<div style="display:flex;gap:8px;margin-top:10px;">'
-        + '<button onclick="window.raGenerateReceiptPDF(\''+bookingId+'\','+invoiceIdx+')" style="flex:1;padding:10px;background:#2d6a4f;color:#fff;border:none;border-radius:6px;font-size:0.85rem;font-weight:600;cursor:pointer;">\ud83d\udce5 \u062a\u062d\u0645\u064a\u0644</button>'
-        + '<button onclick="document.getElementById(\'ra-receipt-image-overlay\').remove()" style="flex:1;padding:10px;background:#7a6b5a;color:#fff;border:none;border-radius:6px;font-size:0.85rem;font-weight:600;cursor:pointer;">\u2716 \u0625\u063a\u0644\u0627\u0642</button>'
-        + '</div>'
-        + '</div>';
-    };
-    img.onerror = function() {
-      overlay.innerHTML = '<div style="background:#fff;border-radius:12px;max-width:400px;width:100%;padding:30px;text-align:center;direction:rtl;font-family:Tajawal,Arial,sans-serif;">'
-        + '<p style="font-size:2rem;">\u274c</p>'
-        + '<p>\u0641\u0634\u0644 \u062a\u0648\u0644\u064a\u062f \u0627\u0644\u0625\u064a\u0635\u0627\u0644</p>'
-        + '<button onclick="document.getElementById(\'ra-receipt-image-overlay\').remove()" style="margin-top:10px;padding:8px 20px;background:#7a6b5a;color:#fff;border:none;border-radius:6px;cursor:pointer;">\u0625\u063a\u0644\u0627\u0642</button>'
-        + '</div>';
-    };
-    img.src = imgUrl;
   };
   
   console.log('[Receipt Override] All enhancements loaded.');
