@@ -1604,7 +1604,9 @@ async function getAttachments() {
 }
 
 async function setAttachments(attMap) {
-  return shopifyGraphQL(`
+  const jsonValue = JSON.stringify(attMap);
+  console.log(`[setAttachments] Saving metafield, size: ${jsonValue.length} bytes`);
+  const result = await shopifyGraphQL(`
     mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
       metafieldsSet(metafields: $metafields) {
         metafields { id key value }
@@ -1616,10 +1618,17 @@ async function setAttachments(attMap) {
       ownerId: SHOP_ID,
       namespace: 'retreat',
       key: 'attachments',
-      value: JSON.stringify(attMap),
+      value: jsonValue,
       type: 'json'
     }]
   });
+  const userErrors = result?.metafieldsSet?.userErrors;
+  if (userErrors?.length) {
+    console.error('[setAttachments] Shopify userErrors:', JSON.stringify(userErrors));
+    throw new Error('Failed to save attachments: ' + JSON.stringify(userErrors));
+  }
+  console.log('[setAttachments] Saved successfully');
+  return result;
 }
 
 // ─── Upload file to Shopify via Staged Uploads ─────────────────────────────
@@ -1760,7 +1769,9 @@ app.post('/upload-attachment/:bookingId', upload.array('files', 10), async (req,
       
       try {
         // Upload to Shopify CDN
+        console.log(`  [CDN] Starting upload for ${filename}...`);
         const cdnUrl = await uploadToShopifyCDN(file.buffer, filename, file.mimetype);
+        console.log(`  [CDN] Success: ${cdnUrl}`);
         
         const att = {
           id: Date.now().toString(36) + Math.random().toString(36).substr(2, 4),
@@ -1773,7 +1784,8 @@ app.post('/upload-attachment/:bookingId', upload.array('files', 10), async (req,
         attMap[bookingId].push(att);
         uploaded.push(att);
       } catch (uploadErr) {
-        console.error(`  Failed to upload ${filename}:`, uploadErr.message);
+        console.error(`  [CDN] Failed to upload ${filename}:`, uploadErr.message);
+        console.error(`  [CDN] Full error:`, uploadErr.stack || uploadErr);
         // Fallback: store as base64 for small files only
         if (file.size < 200000) { // < 200KB
           const base64 = file.buffer.toString('base64');
@@ -1794,7 +1806,13 @@ app.post('/upload-attachment/:bookingId', upload.array('files', 10), async (req,
       }
     }
 
-    await setAttachments(attMap);
+    try {
+      await setAttachments(attMap);
+      console.log(`[upload-attachment] Successfully saved ${uploaded.length} file(s) for booking ${bookingId}`);
+    } catch (saveErr) {
+      console.error(`[upload-attachment] Failed to save metafield:`, saveErr.message);
+      return res.status(500).json({ error: 'Upload succeeded but failed to save: ' + saveErr.message });
+    }
     res.json({ 
       success: true, 
       attachments: attMap[bookingId].map(a => ({ 
