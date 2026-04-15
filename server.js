@@ -1997,17 +1997,12 @@ app.get('/receipt-override.js', (req, res) => {
     if (typeof window.raGenerateReceiptPDF !== 'function') return;
     clearInterval(_checkInterval);
     
-    // Check if already overridden
+    // Check if already overridden by us
     if (window.raGenerateReceiptPDF._pngOverride) return;
     
-    // Check if already has the correct version (toBlob without jsPDF)
-    var fnStr = window.raGenerateReceiptPDF.toString();
-    if (fnStr.indexOf('toBlob') !== -1 && fnStr.indexOf('jsPDF') === -1) {
-      console.log('[Receipt Override] Already using PNG version');
-      return;
-    }
-    
-    console.log('[Receipt Override] Applying PNG override...');
+    // Always apply override because original function does not load html2canvas dynamically
+    // Even if original uses toBlob, it lacks the script-loading fallback
+    console.log('[Receipt Override] Applying PNG override (with html2canvas loader)...');
     
     window.raGenerateReceiptPDF = function(bookingId, invoiceIdx) {
       var store = (typeof getInvoiceStore === 'function') ? getInvoiceStore() : JSON.parse(localStorage.getItem('ra_invoices') || '{}');
