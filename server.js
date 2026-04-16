@@ -2134,29 +2134,27 @@ app.get('/generate-receipt-image/:bookingId/:invoiceIdx', async (req, res) => {
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Tajawal', Arial, sans-serif; background: #F5F3EE; width: 500px; padding: 40px 30px; }
-    .header { text-align: center; margin-bottom: 10px; }
+    .header { text-align: center; margin-bottom: 16px; }
     .header img { max-width: 90px; margin-bottom: 6px; }
-    .header h3 { font-size: 16px; color: #333; font-weight: 700; margin-bottom: 2px; }
-    .header .subtitle { color: #999; font-size: 11px; margin-top: 2px; }
-    .gold-line { height: 2px; background: #C9A84C; margin: 16px 0; }
-    .receipt-title { text-align: center; font-size: 22px; color: #C9A84C; font-weight: 700; margin-bottom: 20px; }
-    table { width: 100%; border-collapse: collapse; margin-bottom: 20px; border: 1px solid #C9A84C; }
-    td { padding: 12px 10px; font-size: 14px; }
-    tr { border-bottom: 1px solid #C9A84C; }
-    tr:last-child { border-bottom: none; }
-    .label { text-align: right; font-weight: 700; color: #333; width: 40%; }
-    .value { text-align: left; color: #555; }
-    .footer { text-align: center; color: #bbb; font-size: 10px; margin-top: 20px; line-height: 1.8; }
+    .receipt-title { font-size: 20px; color: #2d2d2d; font-weight: 700; margin-bottom: 4px; }
+    .receipt-subtitle { color: #999; font-size: 11px; margin-bottom: 20px; }
+    .sep-line { height: 1px; background: #ddd; margin: 0 0 16px 0; }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+    td { padding: 14px 6px; font-size: 14px; }
+    tr { border-bottom: 1px solid #e0ddd8; }
+    tr:last-child { border-bottom: 1px solid #e0ddd8; }
+    .label { text-align: right; font-weight: 700; color: #2d2d2d; width: 35%; }
+    .value { text-align: left; color: #666; }
+    .footer { text-align: center; color: #bbb; font-size: 10px; margin-top: 24px; line-height: 1.8; border-top: 1px solid #e0ddd8; padding-top: 16px; }
   </style>
 </head>
 <body>
   <div class="header">
     <img src="${logo}" crossorigin="anonymous" />
-    <h3>Retreat Private Beach House</h3>
-    <p class="subtitle">\u0627\u0644\u062e\u064a\u0631\u0627\u0646\u060c \u0627\u0644\u0645\u0631\u062d\u0644\u0629 \u0627\u0644\u062e\u0627\u0645\u0633\u0629\u060c \u0634\u0627\u0644\u064a\u0647 \u0631\u0642\u0645 3423</p>
   </div>
-  <div class="gold-line"></div>
   <div class="receipt-title">${typeName}</div>
+  <div class="receipt-subtitle">\u0634\u0627\u0644\u064a\u0647 \u0631\u064a\u062a\u0631\u064a\u062a - \u0627\u0644\u062e\u064a\u0631\u0627\u0646\u060c \u0627\u0644\u0645\u0631\u062d\u0644\u0629 \u0627\u0644\u062e\u0627\u0645\u0633\u0629\u060c \u0634\u0627\u0644\u064a\u0647 \u0631\u0642\u0645 3423</div>
+  <div class="sep-line"></div>
   <table>
     <tr><td class="label">\u0631\u0642\u0645 \u0627\u0644\u0625\u064a\u0635\u0627\u0644</td><td class="value">${receiptNumber}</td></tr>
     <tr><td class="label">\u062a\u0627\u0631\u064a\u062e \u0627\u0644\u0625\u064a\u0635\u0627\u0644</td><td class="value">${receiptDateStr}</td></tr>
@@ -2166,7 +2164,7 @@ app.get('/generate-receipt-image/:bookingId/:invoiceIdx', async (req, res) => {
     <tr><td class="label">\u062a\u0648\u0627\u0631\u064a\u062e \u0627\u0644\u062d\u062c\u0632</td><td class="value">${co} \u2192 ${ci}</td></tr>
     ${inv.notes ? '<tr><td class="label">\u0645\u0644\u0627\u062d\u0638\u0627\u062a</td><td class="value">' + inv.notes + '</td></tr>' : ''}
   </table>
-  <p class="footer">\u0647\u0630\u0627 \u0625\u064a\u0635\u0627\u0644 \u0625\u0644\u0643\u062a\u0631\u0648\u0646\u064a \u0635\u0627\u062f\u0631\u0629 \u0645\u0646 \u0646\u0638\u0627\u0645 Retreat<br>Retreat Private Beach House \u2014 Kuwait</p>
+  <p class="footer">\u0647\u0630\u0627 \u0625\u064a\u0635\u0627\u0644 \u0625\u0644\u0643\u062a\u0631\u0648\u0646\u064a \u0635\u0627\u062f\u0631 \u0645\u0646 \u0646\u0638\u0627\u0645 Retreat</p>
 </body>
 </html>`;
     
