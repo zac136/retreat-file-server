@@ -5,7 +5,8 @@ const fetch = require('node-fetch');
 const { URLSearchParams } = require('url');
 const crypto = require('crypto');
 const FormData = require('form-data');
-const puppeteer = require('puppeteer');
+const puppeteer = require('puppeteer-core');
+const chromium = require('@sparticuz/chromium');
 
 const app = express();
 const upload = multer({ 
@@ -1280,8 +1281,10 @@ body { font-family: "Tajawal", Arial, sans-serif; direction: rtl; padding: 0 6px
   let browser;
   try {
     browser = await puppeteer.launch({
-      headless: 'new',
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath: await chromium.executablePath(),
+      headless: chromium.headless
     });
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: 'networkidle0', timeout: 15000 });
@@ -2155,11 +2158,12 @@ app.get('/generate-receipt-image/:bookingId/:invoiceIdx', async (req, res) => {
     
     // Generate PNG using Puppeteer
     const browser = await puppeteer.launch({
-      headless: 'new',
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+      args: chromium.args,
+      defaultViewport: { width: 500, height: 600, deviceScaleFactor: 2 },
+      executablePath: await chromium.executablePath(),
+      headless: chromium.headless
     });
     const page = await browser.newPage();
-    await page.setViewport({ width: 500, height: 600, deviceScaleFactor: 2 });
     await page.setContent(html, { waitUntil: 'networkidle0' });
     
     // Wait for font to load
