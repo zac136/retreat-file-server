@@ -152,10 +152,29 @@
   
   // ========== PART 3: View Receipts Function ==========
   window._raViewReceipts = function(bookingId) {
-    var store = (typeof getInvoiceStore === 'function') ? getInvoiceStore() : JSON.parse(localStorage.getItem('ra_invoices') || '{}');
-    var invoices = store[bookingId] || [];
+    // First try local store, then fetch from server
+    var localStore = (typeof getInvoiceStore === 'function') ? getInvoiceStore() : JSON.parse(localStorage.getItem('ra_invoices') || '{}');
+    var localInvoices = localStore[bookingId] || [];
     var b = (typeof allBookings !== 'undefined') ? allBookings.find(function(x){return String(x.id)===String(bookingId);}) : null;
     var name = b ? (b.name || b.guest_name || '') : bookingId;
+    
+    // Always fetch from server to get the latest
+    fetch(SERVER + '/get-invoices')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var serverInvoices = (data.invoices && data.invoices[bookingId]) || [];
+        // Merge: prefer server invoices, fallback to local
+        var invoices = serverInvoices.length > 0 ? serverInvoices : localInvoices;
+        window._raShowReceiptsModal(bookingId, invoices, name);
+      })
+      .catch(function(err) {
+        console.error('[ViewReceipts] Server fetch error:', err);
+        // Fallback to local
+        window._raShowReceiptsModal(bookingId, localInvoices, name);
+      });
+  };
+  
+  window._raShowReceiptsModal = function(bookingId, invoices, name) {
     
     var existing = document.getElementById('ra-receipts-overlay');
     if (existing) existing.remove();
