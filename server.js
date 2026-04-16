@@ -2117,6 +2117,15 @@ app.get('/generate-receipt-image/:bookingId/:invoiceIdx', async (req, res) => {
     const guestName = booking.name || booking.guest_name || '';
     const logo = 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663530851339/roNCVxbVgYKQtCRp.png';
     
+    // Generate receipt number and date from createdAt
+    const createdDate = inv.createdAt ? new Date(inv.createdAt) : new Date();
+    const receiptDate = createdDate.toLocaleDateString('en-GB'); // DD/MM/YYYY
+    const receiptYear = createdDate.getFullYear();
+    // Generate a stable receipt number from booking ID + invoice index
+    const hashNum = (parseInt(String(bookingId).slice(-6)) + idx * 1000) % 10000;
+    const receiptNumber = inv.number || `RBH-${receiptYear}-${String(hashNum).padStart(4, '0')}`;
+    const receiptDateStr = inv.date || receiptDate;
+    
     const html = `<!DOCTYPE html>
 <html dir="rtl" lang="ar">
 <head>
@@ -2124,35 +2133,40 @@ app.get('/generate-receipt-image/:bookingId/:invoiceIdx', async (req, res) => {
   <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: 'Tajawal', Arial, sans-serif; background: #f6f3ee; width: 500px; padding: 30px; }
-    .header { text-align: center; margin-bottom: 20px; }
-    .header img { max-width: 100px; margin-bottom: 8px; }
-    .header h2 { font-size: 20px; color: #1B4332; }
-    .header p { color: #888; font-size: 12px; margin-top: 4px; }
-    table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
-    td { padding: 10px; }
-    tr { border-bottom: 1px solid #ddd; }
-    .label { text-align: right; font-weight: bold; color: #1B4332; width: 40%; }
-    .value { text-align: left; }
-    .footer { text-align: center; color: #aaa; font-size: 11px; }
+    body { font-family: 'Tajawal', Arial, sans-serif; background: #FDF8F0; width: 500px; padding: 40px 30px; }
+    .header { text-align: center; margin-bottom: 10px; }
+    .header img { max-width: 90px; margin-bottom: 6px; }
+    .header h3 { font-size: 16px; color: #333; font-weight: 700; margin-bottom: 2px; }
+    .header .subtitle { color: #999; font-size: 11px; margin-top: 2px; }
+    .gold-line { height: 2px; background: linear-gradient(to left, transparent, #C9A84C, transparent); margin: 16px 0; }
+    .receipt-title { text-align: center; font-size: 22px; color: #C9A84C; font-weight: 700; margin-bottom: 20px; }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+    td { padding: 12px 8px; font-size: 14px; }
+    tr { border-bottom: 1px solid #E8E0D0; }
+    tr:last-child { border-bottom: none; }
+    .label { text-align: right; font-weight: 700; color: #333; width: 40%; }
+    .value { text-align: left; color: #555; }
+    .footer { text-align: center; color: #bbb; font-size: 10px; margin-top: 20px; line-height: 1.8; }
   </style>
 </head>
 <body>
   <div class="header">
     <img src="${logo}" crossorigin="anonymous" />
-    <h2>${typeName}</h2>
-    <p>\u0634\u0627\u0644\u064a\u0647 \u0631\u064a\u062a\u0631\u064a\u062a - \u0627\u0644\u062e\u064a\u0631\u0627\u0646\u060c \u0627\u0644\u0645\u0631\u062d\u0644\u0629 \u0627\u0644\u062e\u0627\u0645\u0633\u0629\u060c \u0634\u0627\u0644\u064a\u0647 \u0631\u0642\u0645 3423</p>
+    <h3>Retreat Private Beach House</h3>
+    <p class="subtitle">\u0627\u0644\u062e\u064a\u0631\u0627\u0646\u060c \u0627\u0644\u0645\u0631\u062d\u0644\u0629 \u0627\u0644\u062e\u0627\u0645\u0633\u0629\u060c \u0634\u0627\u0644\u064a\u0647 \u0631\u0642\u0645 3423</p>
   </div>
+  <div class="gold-line"></div>
+  <div class="receipt-title">${typeName}</div>
   <table>
-    <tr><td class="label">\u0631\u0642\u0645 \u0627\u0644\u0625\u064a\u0635\u0627\u0644</td><td class="value">${inv.number || ''}</td></tr>
-    <tr><td class="label">\u062a\u0627\u0631\u064a\u062e \u0627\u0644\u0625\u064a\u0635\u0627\u0644</td><td class="value">${inv.date || ''}</td></tr>
+    <tr><td class="label">\u0631\u0642\u0645 \u0627\u0644\u0625\u064a\u0635\u0627\u0644</td><td class="value">${receiptNumber}</td></tr>
+    <tr><td class="label">\u062a\u0627\u0631\u064a\u062e \u0627\u0644\u0625\u064a\u0635\u0627\u0644</td><td class="value">${receiptDateStr}</td></tr>
     <tr><td class="label">\u0646\u0648\u0639 \u0627\u0644\u0625\u064a\u0635\u0627\u0644</td><td class="value">${typeName}</td></tr>
     <tr><td class="label">\u0627\u0644\u0627\u0633\u0645</td><td class="value">${guestName}</td></tr>
     <tr><td class="label">\u0627\u0644\u0645\u0628\u0644\u063a</td><td class="value">${inv.amount} \u062f.\u0643</td></tr>
     <tr><td class="label">\u062a\u0648\u0627\u0631\u064a\u062e \u0627\u0644\u062d\u062c\u0632</td><td class="value">${co} \u2192 ${ci}</td></tr>
     ${inv.notes ? '<tr><td class="label">\u0645\u0644\u0627\u062d\u0638\u0627\u062a</td><td class="value">' + inv.notes + '</td></tr>' : ''}
   </table>
-  <p class="footer">\u0647\u0630\u0627 \u0625\u064a\u0635\u0627\u0644 \u0625\u0644\u0643\u062a\u0631\u0648\u0646\u064a \u0635\u0627\u062f\u0631 \u0645\u0646 \u0646\u0638\u0627\u0645 Retreat</p>
+  <p class="footer">\u0647\u0630\u0627 \u0625\u064a\u0635\u0627\u0644 \u0625\u0644\u0643\u062a\u0631\u0648\u0646\u064a \u0635\u0627\u062f\u0631\u0629 \u0645\u0646 \u0646\u0638\u0627\u0645 Retreat<br>Retreat Private Beach House \u2014 Kuwait</p>
 </body>
 </html>`;
     
