@@ -2133,16 +2133,16 @@ app.get('/generate-receipt-image/:bookingId/:invoiceIdx', async (req, res) => {
   <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: 'Tajawal', Arial, sans-serif; background: #FDF8F0; width: 500px; padding: 40px 30px; }
+    body { font-family: 'Tajawal', Arial, sans-serif; background: #EDE8DE; width: 500px; padding: 40px 30px; }
     .header { text-align: center; margin-bottom: 10px; }
     .header img { max-width: 90px; margin-bottom: 6px; }
     .header h3 { font-size: 16px; color: #333; font-weight: 700; margin-bottom: 2px; }
     .header .subtitle { color: #999; font-size: 11px; margin-top: 2px; }
-    .gold-line { height: 2px; background: linear-gradient(to left, transparent, #C9A84C, transparent); margin: 16px 0; }
+    .gold-line { height: 2px; background: #C9A84C; margin: 16px 0; }
     .receipt-title { text-align: center; font-size: 22px; color: #C9A84C; font-weight: 700; margin-bottom: 20px; }
-    table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-    td { padding: 12px 8px; font-size: 14px; }
-    tr { border-bottom: 1px solid #E8E0D0; }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 20px; border: 1px solid #C9A84C; }
+    td { padding: 12px 10px; font-size: 14px; }
+    tr { border-bottom: 1px solid #C9A84C; }
     tr:last-child { border-bottom: none; }
     .label { text-align: right; font-weight: 700; color: #333; width: 40%; }
     .value { text-align: left; color: #555; }
