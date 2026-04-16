@@ -2174,10 +2174,12 @@ app.get('/generate-receipt-image/:bookingId/:invoiceIdx', async (req, res) => {
     await browser.close();
     
     // Upload to Shopify CDN
-    const nm = guestName.replace(/\s+/g, '_') || 'customer';
+    const nm = guestName.replace(/[^a-zA-Z0-9\u0600-\u06FF]/g, '_') || 'customer';
+    const safeNm = nm.replace(/[^a-zA-Z0-9_-]/g, '') || 'customer';
     const safeDate = (inv.date || new Date().toLocaleDateString('en-GB')).replace(/\//g, '-');
     const typeFile = inv.type === 'deposit' ? 'receipt_deposit' : 'receipt_rent';
-    const fileName = `${typeFile}_${nm}_${safeDate}.png`;
+    const fileName = `${typeFile}_${safeNm}_${safeDate}.png`;
+    const displayName = `${typeFile}_${nm}_${safeDate}.png`;
     
     let cdnUrl;
     try {
@@ -2206,7 +2208,7 @@ app.get('/generate-receipt-image/:bookingId/:invoiceIdx', async (req, res) => {
     
     // Return the image
     res.setHeader('Content-Type', 'image/png');
-    res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
+    res.setHeader('Content-Disposition', `inline; filename="${fileName}"; filename*=UTF-8''${encodeURIComponent(displayName)}`);
     res.setHeader('X-CDN-URL', cdnUrl || '');
     res.send(pngBuffer);
   } catch (error) {
