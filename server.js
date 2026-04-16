@@ -2133,7 +2133,7 @@ app.get('/generate-receipt-image/:bookingId/:invoiceIdx', async (req, res) => {
   <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: 'Tajawal', Arial, sans-serif; background: #EDE8DE; width: 500px; padding: 40px 30px; }
+    body { font-family: 'Tajawal', Arial, sans-serif; background: #F9F3ED; width: 500px; padding: 40px 30px; }
     .header { text-align: center; margin-bottom: 10px; }
     .header img { max-width: 90px; margin-bottom: 6px; }
     .header h3 { font-size: 16px; color: #333; font-weight: 700; margin-bottom: 2px; }
