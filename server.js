@@ -2136,8 +2136,9 @@ app.get('/generate-receipt-image/:bookingId/:invoiceIdx', async (req, res) => {
     body { font-family: 'Tajawal', Arial, sans-serif; background: #F5F3EE; width: 500px; padding: 40px 30px; }
     .header { text-align: center; margin-bottom: 16px; }
     .header img { max-width: 90px; margin-bottom: 6px; }
-    .receipt-title { font-size: 20px; color: #2d2d2d; font-weight: 700; margin-bottom: 4px; }
-    .receipt-subtitle { color: #999; font-size: 11px; margin-bottom: 20px; }
+    .receipt-title { font-size: 20px; color: #2d2d2d; font-weight: 700; margin-bottom: 4px; text-align: center; }
+     .receipt-subtitle { color: #999; font-size: 11px; margin-bottom: 20px; text-align: center; }
+
     .sep-line { height: 1px; background: #ddd; margin: 0 0 16px 0; }
     table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
     td { padding: 14px 6px; font-size: 14px; }
