@@ -1226,7 +1226,7 @@ async function generateContractPDF(booking, signatureDataURL) {
     'يحق للمؤجر رفض الدخول أو إنهاء الحجز فوراً عند مخالفة الشروط أو تجاوز العدد المسموح أو الإزعاج أو عدم دفع كامل المبلغ، كما يمنع تأجير الشاليه من الباطن أو التنازل عنه للغير.',
   ];
 
-  const termsHtml = terms.map((t, i) => `<li>${t}</li>`).join('');
+  const termsHtml = TERMS.map((t, i) => `<li>${t}</li>`).join('');
 
   const html = `<!DOCTYPE html>
 <html dir="rtl" lang="ar">
